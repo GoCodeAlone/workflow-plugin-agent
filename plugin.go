@@ -68,6 +68,34 @@ func (p *AgentPlugin) WiringHooks() []plugin.WiringHook {
 	}
 }
 
+// NewProviderModuleFactory returns the plugin.ModuleFactory for "agent.provider".
+// This is exported so other plugins can embed the factory without loading the
+// full AgentPlugin (which would cause duplicate step type registration conflicts).
+func NewProviderModuleFactory() plugin.ModuleFactory {
+	return newProviderModuleFactory()
+}
+
+// NewProviderTestFactory returns the plugin.StepFactory for "step.provider_test".
+// Exported for use by host plugins that embed agent capabilities without loading
+// AgentPlugin as a standalone plugin.
+func NewProviderTestFactory() plugin.StepFactory {
+	return newProviderTestFactory()
+}
+
+// NewProviderModelsFactory returns the plugin.StepFactory for "step.provider_models".
+// Exported for use by host plugins that embed agent capabilities without loading
+// AgentPlugin as a standalone plugin.
+func NewProviderModelsFactory() plugin.StepFactory {
+	return newProviderModelsFactory()
+}
+
+// ProviderRegistryHook returns the wiring hook that creates the agent-provider-registry.
+// Exported for use by host plugins that embed agent capabilities without loading
+// AgentPlugin as a standalone plugin.
+func ProviderRegistryHook() plugin.WiringHook {
+	return providerRegistryHook()
+}
+
 // ModuleSchemas returns schema definitions for IDE completions and config validation.
 func (p *AgentPlugin) ModuleSchemas() []*schema.ModuleSchema {
 	return []*schema.ModuleSchema{
