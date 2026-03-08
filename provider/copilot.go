@@ -9,13 +9,16 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"sync"
+	"time"
 )
 
 const (
-	defaultCopilotBaseURL   = "https://api.githubcopilot.com"
-	defaultCopilotModel     = "gpt-4o"
-	defaultCopilotMaxTokens = 4096
-	copilotIntegrationID    = "ratchet"
+	defaultCopilotBaseURL      = "https://api.githubcopilot.com"
+	defaultCopilotModel        = "gpt-4o"
+	defaultCopilotMaxTokens    = 4096
+	copilotTokenExchangeURL    = "https://api.github.com/copilot_internal/v2/token"
+	copilotEditorVersion       = "ratchet/0.1.0"
 )
 
 // CopilotConfig holds configuration for the GitHub Copilot provider.
@@ -30,7 +33,16 @@ type CopilotConfig struct {
 // CopilotProvider implements Provider using the GitHub Copilot Chat API.
 // The API follows the OpenAI Chat Completions format.
 type CopilotProvider struct {
-	config CopilotConfig
+	config      CopilotConfig
+	mu          sync.Mutex
+	bearerToken string
+	expiresAt   time.Time
+}
+
+// copilotTokenResponse is the response from the Copilot token exchange endpoint.
+type copilotTokenResponse struct {
+	Token     string `json:"token"`
+	ExpiresAt int64  `json:"expires_at"`
 }
 
 // NewCopilotProvider creates a new Copilot provider with the given config.
@@ -144,7 +156,9 @@ func (p *CopilotProvider) Chat(ctx context.Context, messages []Message, tools []
 	if err != nil {
 		return nil, fmt.Errorf("copilot: create request: %w", err)
 	}
-	p.setHeaders(req)
+	if err := p.setHeaders(ctx, req); err != nil {
+		return nil, err
+	}
 
 	resp, err := p.config.HTTPClient.Do(req)
 	if err != nil {
@@ -185,7 +199,9 @@ func (p *CopilotProvider) Stream(ctx context.Context, messages []Message, tools 
 	if err != nil {
 		return nil, fmt.Errorf("copilot: create request: %w", err)
 	}
-	p.setHeaders(req)
+	if err := p.setHeaders(ctx, req); err != nil {
+		return nil, err
+	}
 
 	resp, err := p.config.HTTPClient.Do(req)
 	if err != nil {
@@ -258,10 +274,58 @@ func (p *CopilotProvider) buildRequest(messages []Message, tools []ToolDef, stre
 	return req
 }
 
-func (p *CopilotProvider) setHeaders(req *http.Request) {
+// ensureBearerToken exchanges the GitHub OAuth token for a short-lived Copilot
+// bearer token, caching it until 60 seconds before expiry.
+func (p *CopilotProvider) ensureBearerToken(ctx context.Context) error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	if p.bearerToken != "" && time.Now().Before(p.expiresAt.Add(-60*time.Second)) {
+		return nil
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, copilotTokenExchangeURL, nil)
+	if err != nil {
+		return fmt.Errorf("copilot: create token exchange request: %w", err)
+	}
+	req.Header.Set("Authorization", "Token "+p.config.Token)
+	req.Header.Set("Accept", "application/json")
+
+	resp, err := p.config.HTTPClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("copilot: token exchange request: %w", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return fmt.Errorf("copilot: read token exchange response: %w", err)
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("copilot: token exchange failed (status %d): %s", resp.StatusCode, truncate(string(body), 200))
+	}
+
+	var tokenResp copilotTokenResponse
+	if err := json.Unmarshal(body, &tokenResp); err != nil {
+		return fmt.Errorf("copilot: parse token exchange response: %w", err)
+	}
+
+	p.bearerToken = tokenResp.Token
+	p.expiresAt = time.Unix(tokenResp.ExpiresAt, 0)
+	return nil
+}
+
+func (p *CopilotProvider) setHeaders(ctx context.Context, req *http.Request) error {
+	if err := p.ensureBearerToken(ctx); err != nil {
+		return err
+	}
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "Bearer "+p.config.Token)
-	req.Header.Set("Copilot-Integration-Id", copilotIntegrationID)
+	req.Header.Set("Authorization", "Bearer "+p.bearerToken)
+	req.Header.Set("Copilot-Integration-Id", "vscode-chat")
+	req.Header.Set("Editor-Version", "vscode/1.100.0")
+	req.Header.Set("Editor-Plugin-Version", copilotEditorVersion)
+	return nil
 }
 
 func (p *CopilotProvider) parseResponse(apiResp *copilotResponse) (*Response, error) {

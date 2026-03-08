@@ -174,12 +174,20 @@ func listCopilotModels(ctx context.Context, apiKey, baseURL string) ([]ModelInfo
 		baseURL = defaultCopilotBaseURL
 	}
 
+	// Exchange the GitHub OAuth token for a short-lived Copilot bearer token.
+	p := &CopilotProvider{config: CopilotConfig{Token: apiKey, HTTPClient: http.DefaultClient}}
+	if err := p.ensureBearerToken(ctx); err != nil {
+		return copilotFallbackModels(), nil
+	}
+
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, baseURL+"/models", nil)
 	if err != nil {
 		return copilotFallbackModels(), nil
 	}
-	req.Header.Set("Authorization", "Bearer "+apiKey)
-	req.Header.Set("Copilot-Integration-Id", copilotIntegrationID)
+	req.Header.Set("Authorization", "Bearer "+p.bearerToken)
+	req.Header.Set("Copilot-Integration-Id", "vscode-chat")
+	req.Header.Set("Editor-Version", "vscode/1.100.0")
+	req.Header.Set("Editor-Plugin-Version", copilotEditorVersion)
 
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
