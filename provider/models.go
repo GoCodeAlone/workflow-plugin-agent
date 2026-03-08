@@ -32,6 +32,19 @@ func ListModels(ctx context.Context, providerType, apiKey, baseURL string) ([]Mo
 		return listOpenAIModels(ctx, apiKey, baseURL)
 	case "copilot":
 		return listCopilotModels(ctx, apiKey, baseURL)
+	case "copilot_models":
+		if baseURL == "" {
+			baseURL = "https://models.github.ai/inference"
+		}
+		return listOpenAIModels(ctx, apiKey, baseURL)
+	case "openai_azure":
+		return azureOpenAIFallbackModels(), nil
+	case "anthropic_bedrock":
+		return bedrockFallbackModels(), nil
+	case "anthropic_vertex":
+		return vertexFallbackModels(), nil
+	case "anthropic_foundry":
+		return foundryFallbackModels(), nil
 	case "cohere":
 		return listCohereModels(ctx, apiKey, baseURL)
 	case "mock":
@@ -356,6 +369,46 @@ func cohereFallbackModels() []ModelInfo {
 		{ID: "command-a-03-2025", Name: "Command A (March 2025)"},
 		{ID: "command-r", Name: "Command R"},
 		{ID: "command-r-plus", Name: "Command R+"},
+	}
+}
+
+func azureOpenAIFallbackModels() []ModelInfo {
+	return []ModelInfo{
+		{ID: "gpt-4o", Name: "GPT-4o"},
+		{ID: "gpt-4o-mini", Name: "GPT-4o Mini"},
+		{ID: "gpt-4.1", Name: "GPT-4.1"},
+		{ID: "gpt-4.1-mini", Name: "GPT-4.1 Mini"},
+		{ID: "o3-mini", Name: "o3-mini"},
+	}
+}
+
+func bedrockFallbackModels() []ModelInfo {
+	return []ModelInfo{
+		{ID: "anthropic.claude-opus-4-20250514-v1:0", Name: "Claude Opus 4"},
+		{ID: "anthropic.claude-sonnet-4-20250514-v1:0", Name: "Claude Sonnet 4"},
+		{ID: "anthropic.claude-haiku-4-20250514-v1:0", Name: "Claude Haiku 4"},
+		{ID: "anthropic.claude-3-5-sonnet-20241022-v2:0", Name: "Claude 3.5 Sonnet v2"},
+		{ID: "anthropic.claude-3-5-haiku-20241022-v1:0", Name: "Claude 3.5 Haiku"},
+	}
+}
+
+func vertexFallbackModels() []ModelInfo {
+	return []ModelInfo{
+		{ID: "claude-opus-4@20250514", Name: "Claude Opus 4"},
+		{ID: "claude-sonnet-4@20250514", Name: "Claude Sonnet 4"},
+		{ID: "claude-haiku-4@20250514", Name: "Claude Haiku 4"},
+		{ID: "claude-3-5-sonnet-v2@20241022", Name: "Claude 3.5 Sonnet v2"},
+		{ID: "claude-3-5-haiku@20241022", Name: "Claude 3.5 Haiku"},
+	}
+}
+
+func foundryFallbackModels() []ModelInfo {
+	return []ModelInfo{
+		{ID: "claude-opus-4-20250514", Name: "Claude Opus 4"},
+		{ID: "claude-sonnet-4-20250514", Name: "Claude Sonnet 4"},
+		{ID: "claude-haiku-4-20250514", Name: "Claude Haiku 4"},
+		{ID: "claude-3-5-sonnet-20241022-v2", Name: "Claude 3.5 Sonnet v2"},
+		{ID: "claude-3-5-haiku-20241022", Name: "Claude 3.5 Haiku"},
 	}
 }
 
