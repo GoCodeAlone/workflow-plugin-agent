@@ -1,7 +1,6 @@
 package provider
 
 import (
-	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -40,7 +39,7 @@ func TestNewAnthropicBedrockProvider_Validation(t *testing.T) {
 				if err == nil {
 					t.Fatalf("expected error containing %q, got nil", tt.wantErr)
 				}
-				if got := err.Error(); !contains(got, tt.wantErr) {
+				if got := err.Error(); !strings.Contains(got, tt.wantErr) {
 					t.Fatalf("error %q does not contain %q", got, tt.wantErr)
 				}
 				return
@@ -189,7 +188,7 @@ func TestAnthropicBedrockProvider_Chat(t *testing.T) {
 		},
 	}
 
-	resp, err := p.Chat(context.Background(), []Message{
+	resp, err := p.Chat(t.Context(), []Message{
 		{Role: RoleSystem, Content: "You are helpful."},
 		{Role: RoleUser, Content: "Hi"},
 	}, nil)
@@ -258,7 +257,7 @@ func TestAnthropicBedrockProvider_Stream(t *testing.T) {
 		},
 	}
 
-	ch, err := p.Stream(context.Background(), []Message{
+	ch, err := p.Stream(t.Context(), []Message{
 		{Role: RoleUser, Content: "Hi"},
 	}, nil)
 	if err != nil {
@@ -284,7 +283,7 @@ func TestAnthropicBedrockProvider_Stream(t *testing.T) {
 	if !done {
 		t.Error("expected done event")
 	}
-	if got := join(texts); got != "Hello Bedrock" {
+	if got := strings.Join(texts, ""); got != "Hello Bedrock" {
 		t.Errorf("streamed text = %q, want %q", got, "Hello Bedrock")
 	}
 }

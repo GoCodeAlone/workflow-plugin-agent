@@ -1,11 +1,11 @@
 package provider
 
 import (
-	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 )
 
@@ -42,7 +42,7 @@ func TestNewAnthropicFoundryProvider_Validation(t *testing.T) {
 				if err == nil {
 					t.Fatalf("expected error containing %q, got nil", tt.wantErr)
 				}
-				if got := err.Error(); !contains(got, tt.wantErr) {
+				if got := err.Error(); !strings.Contains(got, tt.wantErr) {
 					t.Fatalf("error %q does not contain %q", got, tt.wantErr)
 				}
 				return
@@ -133,7 +133,7 @@ func TestAnthropicFoundryProvider_APIKeyAuth(t *testing.T) {
 		url: srv.URL,
 	}
 
-	_, err := p.Chat(context.Background(), []Message{
+	_, err := p.Chat(t.Context(), []Message{
 		{Role: RoleUser, Content: "hi"},
 	}, nil)
 	if err != nil {
@@ -175,7 +175,7 @@ func TestAnthropicFoundryProvider_EntraIDAuth(t *testing.T) {
 		url: srv.URL,
 	}
 
-	_, err := p.Chat(context.Background(), []Message{
+	_, err := p.Chat(t.Context(), []Message{
 		{Role: RoleUser, Content: "hi"},
 	}, nil)
 	if err != nil {
@@ -216,7 +216,7 @@ func TestAnthropicFoundryProvider_Chat(t *testing.T) {
 		url: srv.URL,
 	}
 
-	resp, err := p.Chat(context.Background(), []Message{
+	resp, err := p.Chat(t.Context(), []Message{
 		{Role: RoleSystem, Content: "You are helpful."},
 		{Role: RoleUser, Content: "Hi"},
 	}, nil)
@@ -279,7 +279,7 @@ func TestAnthropicFoundryProvider_Stream(t *testing.T) {
 		url: srv.URL,
 	}
 
-	ch, err := p.Stream(context.Background(), []Message{
+	ch, err := p.Stream(t.Context(), []Message{
 		{Role: RoleUser, Content: "Hi"},
 	}, nil)
 	if err != nil {
@@ -305,30 +305,7 @@ func TestAnthropicFoundryProvider_Stream(t *testing.T) {
 	if !done {
 		t.Error("expected done event")
 	}
-	if got := join(texts); got != "Hello world" {
+	if got := strings.Join(texts, ""); got != "Hello world" {
 		t.Errorf("streamed text = %q, want %q", got, "Hello world")
 	}
-}
-
-// helpers
-
-func contains(s, sub string) bool {
-	return len(s) >= len(sub) && (s == sub || len(s) > 0 && containsStr(s, sub))
-}
-
-func containsStr(s, sub string) bool {
-	for i := 0; i <= len(s)-len(sub); i++ {
-		if s[i:i+len(sub)] == sub {
-			return true
-		}
-	}
-	return false
-}
-
-func join(parts []string) string {
-	result := ""
-	for _, p := range parts {
-		result += p
-	}
-	return result
 }

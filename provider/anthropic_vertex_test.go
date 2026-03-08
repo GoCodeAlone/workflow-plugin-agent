@@ -1,11 +1,11 @@
 package provider
 
 import (
-	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"golang.org/x/oauth2"
@@ -47,7 +47,7 @@ func TestNewAnthropicVertexProvider_Validation(t *testing.T) {
 				if err == nil {
 					t.Fatalf("expected error containing %q, got nil", tt.wantErr)
 				}
-				if got := err.Error(); !contains(got, tt.wantErr) {
+				if got := err.Error(); !strings.Contains(got, tt.wantErr) {
 					t.Fatalf("error %q does not contain %q", got, tt.wantErr)
 				}
 				return
@@ -143,23 +143,13 @@ func TestAnthropicVertexProvider_BearerAuth(t *testing.T) {
 		},
 		tokenSource: &mockTokenSource{token: "my-gcp-token"},
 	}
-	// Override URL to test server
-	origURL := p.vertexURL
-	_ = origURL // keep reference
-	// We need to override the URL — use a wrapper approach via direct field manipulation
-	// Instead, set the URL by calling Chat which will use vertexURL(), but we can't override it.
-	// So let's test the header separately by making a direct request.
-
-	// For the integration test, we'll construct the provider to point at our test server.
-	// Since vertexURL() is computed from config fields, we'll just verify headers by
-	// making the Chat call with a transport that redirects.
 	transport := &urlRewriteTransport{
 		target:    srv.URL,
 		transport: srv.Client().Transport,
 	}
 	p.config.HTTPClient = &http.Client{Transport: transport}
 
-	_, err := p.Chat(context.Background(), []Message{
+	_, err := p.Chat(t.Context(), []Message{
 		{Role: RoleUser, Content: "hi"},
 	}, nil)
 	if err != nil {
@@ -220,7 +210,7 @@ func TestAnthropicVertexProvider_Chat(t *testing.T) {
 		tokenSource: &mockTokenSource{token: "tok"},
 	}
 
-	resp, err := p.Chat(context.Background(), []Message{
+	resp, err := p.Chat(t.Context(), []Message{
 		{Role: RoleSystem, Content: "You are helpful."},
 		{Role: RoleUser, Content: "Hi"},
 	}, nil)
@@ -277,7 +267,7 @@ func TestAnthropicVertexProvider_Stream(t *testing.T) {
 		tokenSource: &mockTokenSource{token: "tok"},
 	}
 
-	ch, err := p.Stream(context.Background(), []Message{
+	ch, err := p.Stream(t.Context(), []Message{
 		{Role: RoleUser, Content: "Hi"},
 	}, nil)
 	if err != nil {
@@ -303,7 +293,7 @@ func TestAnthropicVertexProvider_Stream(t *testing.T) {
 	if !done {
 		t.Error("expected done event")
 	}
-	if got := join(texts); got != "Hello Vertex" {
+	if got := strings.Join(texts, ""); got != "Hello Vertex" {
 		t.Errorf("streamed text = %q, want %q", got, "Hello Vertex")
 	}
 }
