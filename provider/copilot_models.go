@@ -1,9 +1,6 @@
 package provider
 
-import (
-	"context"
-	"fmt"
-)
+const defaultCopilotModelsBaseURL = "https://models.github.ai/inference"
 
 // CopilotModelsConfig configures the GitHub Models provider.
 // GitHub Models is a separate product from GitHub Copilot, available at models.github.ai.
@@ -19,38 +16,40 @@ type CopilotModelsConfig struct {
 	MaxTokens int
 }
 
-// copilotModelsProvider uses GitHub Models (models.github.ai) for inference.
-type copilotModelsProvider struct {
-	config CopilotModelsConfig
+// CopilotModelsProvider uses GitHub Models (models.github.ai) for inference.
+// It wraps OpenAIProvider since GitHub Models uses an OpenAI-compatible API.
+type CopilotModelsProvider struct {
+	*OpenAIProvider
 }
 
-// NewCopilotModelsProvider creates a provider that uses GitHub Models for inference.
-// GitHub Models provides access to various AI models via a fine-grained PAT.
-//
-// NOT YET IMPLEMENTED — scaffolded for future development.
-//
-// Docs: https://docs.github.com/en/rest/models/inference
-// Billing: https://docs.github.com/billing/managing-billing-for-your-products/about-billing-for-github-models
-func NewCopilotModelsProvider(_ CopilotModelsConfig) (*copilotModelsProvider, error) {
-	return nil, fmt.Errorf("copilot_models provider not yet implemented: see https://docs.github.com/en/rest/models/inference")
-}
+func (p *CopilotModelsProvider) Name() string { return "copilot_models" }
 
-func (p *copilotModelsProvider) Name() string { return "copilot_models" }
-
-func (p *copilotModelsProvider) Chat(_ context.Context, _ []Message, _ []ToolDef) (*Response, error) {
-	return nil, fmt.Errorf("copilot_models provider not yet implemented")
-}
-
-func (p *copilotModelsProvider) Stream(_ context.Context, _ []Message, _ []ToolDef) (<-chan StreamEvent, error) {
-	return nil, fmt.Errorf("copilot_models provider not yet implemented")
-}
-
-func (p *copilotModelsProvider) AuthModeInfo() AuthModeInfo {
+func (p *CopilotModelsProvider) AuthModeInfo() AuthModeInfo {
 	return AuthModeInfo{
 		Mode:        "github_models",
 		DisplayName: "GitHub Models",
 		Description: "Access AI models via GitHub's Models marketplace using a fine-grained PAT with models:read scope.",
 		DocsURL:     "https://docs.github.com/en/rest/models/inference",
 		ServerSafe:  true,
+	}
+}
+
+// NewCopilotModelsProvider creates a provider that uses GitHub Models for inference.
+// GitHub Models provides access to various AI models via a fine-grained PAT.
+//
+// Docs: https://docs.github.com/en/rest/models/inference
+// Billing: https://docs.github.com/billing/managing-billing-for-your-products/about-billing-for-github-models
+func NewCopilotModelsProvider(cfg CopilotModelsConfig) *CopilotModelsProvider {
+	baseURL := cfg.BaseURL
+	if baseURL == "" {
+		baseURL = defaultCopilotModelsBaseURL
+	}
+	return &CopilotModelsProvider{
+		OpenAIProvider: NewOpenAIProvider(OpenAIConfig{
+			APIKey:    cfg.Token,
+			Model:     cfg.Model,
+			BaseURL:   baseURL,
+			MaxTokens: cfg.MaxTokens,
+		}),
 	}
 }
