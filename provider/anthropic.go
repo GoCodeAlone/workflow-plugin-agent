@@ -51,6 +51,16 @@ func NewAnthropicProvider(cfg AnthropicConfig) *AnthropicProvider {
 
 func (p *AnthropicProvider) Name() string { return "anthropic" }
 
+func (p *AnthropicProvider) AuthModeInfo() AuthModeInfo {
+	return AuthModeInfo{
+		Mode:        "direct",
+		DisplayName: "Anthropic (Direct API)",
+		Description: "Direct access to Anthropic's Claude models via API key.",
+		DocsURL:     "https://platform.claude.com/docs/en/api/getting-started",
+		ServerSafe:  true,
+	}
+}
+
 // anthropicRequest is the request body for the Messages API.
 type anthropicRequest struct {
 	Model     string             `json:"model"`

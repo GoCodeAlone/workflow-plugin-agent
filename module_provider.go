@@ -240,6 +240,15 @@ type mockProvider struct {
 
 func (m *mockProvider) Name() string { return "mock" }
 
+func (m *mockProvider) AuthModeInfo() provider.AuthModeInfo {
+	return provider.AuthModeInfo{
+		Mode:        "mock",
+		DisplayName: "Mock Provider",
+		Description: "Scripted mock provider for testing and demos.",
+		ServerSafe:  true,
+	}
+}
+
 func (m *mockProvider) Chat(_ context.Context, _ []provider.Message, _ []provider.ToolDef) (*provider.Response, error) {
 	m.mu.Lock()
 	resp := m.responses[m.idx%len(m.responses)]
@@ -269,6 +278,14 @@ type errProvider struct {
 }
 
 func (e *errProvider) Name() string { return "error" }
+
+func (e *errProvider) AuthModeInfo() provider.AuthModeInfo {
+	return provider.AuthModeInfo{
+		Mode:        "error",
+		DisplayName: "Error Provider",
+		Description: "Sentinel provider that always returns a configuration error.",
+	}
+}
 func (e *errProvider) Chat(_ context.Context, _ []provider.Message, _ []provider.ToolDef) (*provider.Response, error) {
 	return nil, e.err
 }

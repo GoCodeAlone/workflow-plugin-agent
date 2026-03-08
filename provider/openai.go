@@ -50,6 +50,16 @@ func NewOpenAIProvider(cfg OpenAIConfig) *OpenAIProvider {
 
 func (p *OpenAIProvider) Name() string { return "openai" }
 
+func (p *OpenAIProvider) AuthModeInfo() AuthModeInfo {
+	return AuthModeInfo{
+		Mode:        "direct",
+		DisplayName: "OpenAI (Direct API)",
+		Description: "Direct access to OpenAI models via API key.",
+		DocsURL:     "https://platform.openai.com/docs/api-reference/introduction",
+		ServerSafe:  true,
+	}
+}
+
 // openaiRequest is the request body for the Chat Completions API.
 type openaiRequest struct {
 	Model     string          `json:"model"`

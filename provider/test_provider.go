@@ -75,6 +75,16 @@ func NewTestProvider(source ResponseSource, opts ...TestProviderOption) *TestPro
 // Name implements Provider.
 func (tp *TestProvider) Name() string { return tp.name }
 
+// AuthModeInfo implements Provider.
+func (tp *TestProvider) AuthModeInfo() AuthModeInfo {
+	return AuthModeInfo{
+		Mode:        "test",
+		DisplayName: "Test Provider",
+		Description: "Mock provider for testing.",
+		ServerSafe:  true,
+	}
+}
+
 // Chat implements Provider.
 func (tp *TestProvider) Chat(ctx context.Context, messages []Message, tools []ToolDef) (*Response, error) {
 	interaction := Interaction{

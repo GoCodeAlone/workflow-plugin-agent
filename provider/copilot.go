@@ -64,6 +64,17 @@ func NewCopilotProvider(cfg CopilotConfig) *CopilotProvider {
 
 func (p *CopilotProvider) Name() string { return "copilot" }
 
+func (p *CopilotProvider) AuthModeInfo() AuthModeInfo {
+	return AuthModeInfo{
+		Mode:        "personal",
+		DisplayName: "GitHub Copilot (Personal/IDE)",
+		Description: "Uses GitHub Copilot's chat completions API via OAuth token exchange. Intended for IDE/CLI use under a Copilot Individual or Business subscription.",
+		Warning:     "This mode uses Copilot's internal API intended for IDE integrations. Using it in server/service contexts may violate GitHub Copilot Terms of Service (https://docs.github.com/en/site-policy/github-terms/github-terms-for-additional-products-and-features).",
+		DocsURL:     "https://docs.github.com/en/copilot",
+		ServerSafe:  false,
+	}
+}
+
 // copilotRequest is the request body for the Copilot Chat Completions API.
 type copilotRequest struct {
 	Model     string           `json:"model"`

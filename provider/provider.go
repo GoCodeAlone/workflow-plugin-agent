@@ -68,6 +68,9 @@ type Provider interface {
 	// Stream sends a streaming request. Events are delivered on the returned channel.
 	// The channel is closed when the response is complete or an error occurs.
 	Stream(ctx context.Context, messages []Message, tools []ToolDef) (<-chan StreamEvent, error)
+
+	// AuthModeInfo returns metadata about this provider's authentication mode.
+	AuthModeInfo() AuthModeInfo
 }
 
 // Embedder is optionally implemented by providers that support text embedding.
