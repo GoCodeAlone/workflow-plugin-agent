@@ -27,7 +27,7 @@ jobs:
         run: git config --global url."https://${{ secrets.RELEASES_TOKEN }}@github.com/".insteadOf "https://github.com/"
 
       - name: Run GoReleaser
-        uses: goreleaser/goreleaser-action@v6
+        uses: goreleaser/goreleaser-action@v7
         with:
           distribution: goreleaser
           version: '~> v2'
