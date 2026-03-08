@@ -1,7 +1,6 @@
 package provider
 
 import (
-	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -125,7 +124,7 @@ func TestOpenAIAzureProvider_APIKeyAuth(t *testing.T) {
 		endpoint: srv.URL,
 	}
 
-	got, err := p.Chat(context.Background(), []Message{
+	got, err := p.Chat(t.Context(), []Message{
 		{Role: RoleUser, Content: "hi"},
 	}, nil)
 	if err != nil {
@@ -168,7 +167,7 @@ func TestOpenAIAzureProvider_EntraTokenAuth(t *testing.T) {
 		endpoint: srv.URL,
 	}
 
-	got, err := p.Chat(context.Background(), []Message{
+	got, err := p.Chat(t.Context(), []Message{
 		{Role: RoleUser, Content: "hi"},
 	}, nil)
 	if err != nil {
@@ -215,7 +214,7 @@ func TestOpenAIAzureProvider_Stream(t *testing.T) {
 		endpoint: srv.URL,
 	}
 
-	ch, err := p.Stream(context.Background(), []Message{
+	ch, err := p.Stream(t.Context(), []Message{
 		{Role: RoleUser, Content: "hi"},
 	}, nil)
 	if err != nil {

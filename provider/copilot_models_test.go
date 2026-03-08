@@ -1,7 +1,6 @@
 package provider
 
 import (
-	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -76,7 +75,7 @@ func TestCopilotModelsProvider_Chat(t *testing.T) {
 		BaseURL: srv.URL,
 	})
 
-	got, err := p.Chat(context.Background(), []Message{
+	got, err := p.Chat(t.Context(), []Message{
 		{Role: RoleUser, Content: "hi"},
 	}, nil)
 	if err != nil {
@@ -120,7 +119,7 @@ func TestCopilotModelsProvider_Stream(t *testing.T) {
 		BaseURL: srv.URL,
 	})
 
-	ch, err := p.Stream(context.Background(), []Message{
+	ch, err := p.Stream(t.Context(), []Message{
 		{Role: RoleUser, Content: "hi"},
 	}, nil)
 	if err != nil {
