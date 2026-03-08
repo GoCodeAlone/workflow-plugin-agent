@@ -1,9 +1,15 @@
 package provider
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
+	"io"
+	"net/http"
 )
+
+const defaultAzureOpenAIAPIVersion = "2024-10-21"
 
 // OpenAIAzureConfig configures the OpenAI provider for Azure OpenAI Service.
 // Uses Azure API keys or Entra ID tokens. URLs follow the pattern:
@@ -21,33 +27,20 @@ type OpenAIAzureConfig struct {
 	APIKey string
 	// EntraToken is a Microsoft Entra ID bearer token (optional, alternative to APIKey).
 	EntraToken string
+	// HTTPClient overrides the default HTTP client.
+	HTTPClient *http.Client
 }
 
-// openaiAzureProvider accesses OpenAI models via Azure OpenAI Service.
-type openaiAzureProvider struct {
+// OpenAIAzureProvider accesses OpenAI models via Azure OpenAI Service.
+type OpenAIAzureProvider struct {
 	config OpenAIAzureConfig
+	// endpoint is the fully constructed chat completions URL.
+	endpoint string
 }
 
-// NewOpenAIAzureProvider creates a provider that accesses OpenAI models via Azure.
-//
-// NOT YET IMPLEMENTED — scaffolded for future development.
-//
-// Docs: https://learn.microsoft.com/en-us/azure/ai-services/openai/reference
-func NewOpenAIAzureProvider(_ OpenAIAzureConfig) (*openaiAzureProvider, error) {
-	return nil, fmt.Errorf("openai_azure provider not yet implemented: see https://learn.microsoft.com/en-us/azure/ai-services/openai/reference")
-}
+func (p *OpenAIAzureProvider) Name() string { return "openai_azure" }
 
-func (p *openaiAzureProvider) Name() string { return "openai_azure" }
-
-func (p *openaiAzureProvider) Chat(_ context.Context, _ []Message, _ []ToolDef) (*Response, error) {
-	return nil, fmt.Errorf("openai_azure provider not yet implemented")
-}
-
-func (p *openaiAzureProvider) Stream(_ context.Context, _ []Message, _ []ToolDef) (<-chan StreamEvent, error) {
-	return nil, fmt.Errorf("openai_azure provider not yet implemented")
-}
-
-func (p *openaiAzureProvider) AuthModeInfo() AuthModeInfo {
+func (p *OpenAIAzureProvider) AuthModeInfo() AuthModeInfo {
 	return AuthModeInfo{
 		Mode:        "azure",
 		DisplayName: "OpenAI (Azure OpenAI Service)",
@@ -55,4 +48,207 @@ func (p *openaiAzureProvider) AuthModeInfo() AuthModeInfo {
 		DocsURL:     "https://learn.microsoft.com/en-us/azure/ai-services/openai/reference",
 		ServerSafe:  true,
 	}
+}
+
+// NewOpenAIAzureProvider creates a provider that accesses OpenAI models via Azure.
+//
+// Docs: https://learn.microsoft.com/en-us/azure/ai-services/openai/reference
+func NewOpenAIAzureProvider(cfg OpenAIAzureConfig) (*OpenAIAzureProvider, error) {
+	if cfg.Resource == "" {
+		return nil, fmt.Errorf("openai_azure: Resource is required")
+	}
+	if cfg.DeploymentName == "" {
+		return nil, fmt.Errorf("openai_azure: DeploymentName is required")
+	}
+	if cfg.APIKey == "" && cfg.EntraToken == "" {
+		return nil, fmt.Errorf("openai_azure: APIKey or EntraToken is required")
+	}
+	if cfg.APIVersion == "" {
+		cfg.APIVersion = defaultAzureOpenAIAPIVersion
+	}
+	if cfg.MaxTokens <= 0 {
+		cfg.MaxTokens = defaultOpenAIMaxTokens
+	}
+	if cfg.HTTPClient == nil {
+		cfg.HTTPClient = http.DefaultClient
+	}
+
+	endpoint := fmt.Sprintf("https://%s.openai.azure.com/openai/deployments/%s/chat/completions?api-version=%s",
+		cfg.Resource, cfg.DeploymentName, cfg.APIVersion)
+
+	return &OpenAIAzureProvider{config: cfg, endpoint: endpoint}, nil
+}
+
+func (p *OpenAIAzureProvider) Chat(ctx context.Context, messages []Message, tools []ToolDef) (*Response, error) {
+	reqBody := p.buildRequest(messages, tools, false)
+
+	data, err := json.Marshal(reqBody)
+	if err != nil {
+		return nil, fmt.Errorf("openai_azure: marshal request: %w", err)
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, p.endpoint, bytes.NewReader(data))
+	if err != nil {
+		return nil, fmt.Errorf("openai_azure: create request: %w", err)
+	}
+	p.setHeaders(req)
+
+	resp, err := p.config.HTTPClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("openai_azure: send request: %w", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("openai_azure: read response: %w", err)
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("openai_azure: API error (status %d): %s", resp.StatusCode, string(body))
+	}
+
+	var apiResp openaiResponse
+	if err := json.Unmarshal(body, &apiResp); err != nil {
+		return nil, fmt.Errorf("openai_azure: unmarshal response: %w", err)
+	}
+
+	if apiResp.Error != nil {
+		return nil, fmt.Errorf("openai_azure: %s: %s", apiResp.Error.Type, apiResp.Error.Message)
+	}
+
+	return p.parseResponse(&apiResp)
+}
+
+func (p *OpenAIAzureProvider) Stream(ctx context.Context, messages []Message, tools []ToolDef) (<-chan StreamEvent, error) {
+	reqBody := p.buildRequest(messages, tools, true)
+
+	data, err := json.Marshal(reqBody)
+	if err != nil {
+		return nil, fmt.Errorf("openai_azure: marshal request: %w", err)
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, p.endpoint, bytes.NewReader(data))
+	if err != nil {
+		return nil, fmt.Errorf("openai_azure: create request: %w", err)
+	}
+	p.setHeaders(req)
+
+	resp, err := p.config.HTTPClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("openai_azure: send request: %w", err)
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		_ = resp.Body.Close()
+		return nil, fmt.Errorf("openai_azure: API error (status %d): %s", resp.StatusCode, string(body))
+	}
+
+	// Reuse the OpenAI SSE parser — create a temporary OpenAIProvider just for readSSE.
+	oai := &OpenAIProvider{}
+	ch := make(chan StreamEvent, 16)
+	go oai.readSSE(resp.Body, ch)
+	return ch, nil
+}
+
+func (p *OpenAIAzureProvider) buildRequest(messages []Message, tools []ToolDef, stream bool) *openaiRequest {
+	req := &openaiRequest{
+		Model:     p.config.DeploymentName,
+		MaxTokens: p.config.MaxTokens,
+		Stream:    stream,
+	}
+
+	for _, msg := range messages {
+		switch msg.Role {
+		case RoleTool:
+			req.Messages = append(req.Messages, openaiMessage{
+				Role:       "tool",
+				Content:    msg.Content,
+				ToolCallID: msg.ToolCallID,
+			})
+		case RoleAssistant:
+			om := openaiMessage{
+				Role:    "assistant",
+				Content: msg.Content,
+			}
+			for _, tc := range msg.ToolCalls {
+				args := "{}"
+				if tc.Arguments != nil {
+					if b, err := json.Marshal(tc.Arguments); err == nil {
+						args = string(b)
+					}
+				}
+				om.ToolCalls = append(om.ToolCalls, openaiToolCall{
+					ID:       tc.ID,
+					Type:     "function",
+					Function: openaiToolCallFunc{Name: tc.Name, Arguments: args},
+				})
+			}
+			req.Messages = append(req.Messages, om)
+		default:
+			req.Messages = append(req.Messages, openaiMessage{
+				Role:    string(msg.Role),
+				Content: msg.Content,
+			})
+		}
+	}
+
+	for _, t := range tools {
+		schema := t.Parameters
+		if schema == nil {
+			schema = map[string]any{"type": "object", "properties": map[string]any{}}
+		}
+		req.Tools = append(req.Tools, openaiTool{
+			Type: "function",
+			Function: openaiToolFunc{
+				Name:        t.Name,
+				Description: t.Description,
+				Parameters:  schema,
+			},
+		})
+	}
+
+	return req
+}
+
+func (p *OpenAIAzureProvider) setHeaders(req *http.Request) {
+	req.Header.Set("Content-Type", "application/json")
+	if p.config.APIKey != "" {
+		req.Header.Set("api-key", p.config.APIKey)
+	} else if p.config.EntraToken != "" {
+		req.Header.Set("Authorization", "Bearer "+p.config.EntraToken)
+	}
+}
+
+func (p *OpenAIAzureProvider) parseResponse(apiResp *openaiResponse) (*Response, error) {
+	resp := &Response{
+		Usage: Usage{
+			InputTokens:  apiResp.Usage.PromptTokens,
+			OutputTokens: apiResp.Usage.CompletionTokens,
+		},
+	}
+
+	if len(apiResp.Choices) == 0 {
+		return resp, nil
+	}
+
+	msg := apiResp.Choices[0].Message
+	resp.Content = msg.Content
+
+	for _, tc := range msg.ToolCalls {
+		var args map[string]any
+		if tc.Function.Arguments != "" {
+			if err := json.Unmarshal([]byte(tc.Function.Arguments), &args); err != nil {
+				return nil, fmt.Errorf("openai_azure: unmarshal tool call arguments for %q: %w", tc.Function.Name, err)
+			}
+		}
+		resp.ToolCalls = append(resp.ToolCalls, ToolCall{
+			ID:        tc.ID,
+			Name:      tc.Function.Name,
+			Arguments: args,
+		})
+	}
+
+	return resp, nil
 }
