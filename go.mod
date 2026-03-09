@@ -4,8 +4,9 @@ go 1.26.0
 
 require (
 	github.com/CrisisTextLine/modular v1.11.11
-	github.com/GoCodeAlone/workflow v0.3.24
+	github.com/GoCodeAlone/workflow v0.3.28
 	github.com/google/uuid v1.6.0
+	golang.org/x/oauth2 v0.35.0
 	gopkg.in/yaml.v3 v3.0.1
 )
 
@@ -160,7 +161,6 @@ require (
 	golang.org/x/crypto v0.48.0 // indirect
 	golang.org/x/exp v0.0.0-20260218203240-3dfff04db8fa // indirect
 	golang.org/x/net v0.51.0 // indirect
-	golang.org/x/oauth2 v0.35.0 // indirect
 	golang.org/x/sync v0.19.0 // indirect
 	golang.org/x/sys v0.41.0 // indirect
 	golang.org/x/text v0.34.0 // indirect
