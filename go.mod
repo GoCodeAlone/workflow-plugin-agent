@@ -4,7 +4,7 @@ go 1.26.0
 
 require (
 	github.com/GoCodeAlone/modular v1.12.0
-	github.com/GoCodeAlone/workflow v0.3.29
+	github.com/GoCodeAlone/workflow v0.3.30
 	github.com/google/uuid v1.6.0
 	golang.org/x/oauth2 v0.35.0
 	gopkg.in/yaml.v3 v3.0.1
@@ -22,7 +22,7 @@ require (
 	github.com/BurntSushi/toml v1.6.0 // indirect
 	github.com/DataDog/datadog-go/v5 v5.4.0 // indirect
 	github.com/GoCodeAlone/modular/modules/auth v1.12.0 // indirect
-	github.com/GoCodeAlone/modular/modules/eventbus/v2 v2.5.0 // indirect
+	github.com/GoCodeAlone/modular/modules/eventbus/v2 v2.5.1 // indirect
 	github.com/GoCodeAlone/yaegi v0.17.1 // indirect
 	github.com/GoogleCloudPlatform/opentelemetry-operations-go/detectors/gcp v1.30.0 // indirect
 	github.com/GoogleCloudPlatform/opentelemetry-operations-go/exporter/metric v0.55.0 // indirect
