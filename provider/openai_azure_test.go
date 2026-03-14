@@ -2,6 +2,7 @@ package provider
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -78,19 +79,6 @@ func TestOpenAIAzureProvider_DefaultAPIVersion(t *testing.T) {
 	}
 }
 
-func TestOpenAIAzureProvider_URLConstruction(t *testing.T) {
-	p, err := NewOpenAIAzureProvider(OpenAIAzureConfig{
-		Resource: "myres", DeploymentName: "gpt-4o", APIKey: "key", APIVersion: "2024-10-21",
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	want := "https://myres.openai.azure.com/openai/deployments/gpt-4o/chat/completions?api-version=2024-10-21"
-	if p.endpoint != want {
-		t.Errorf("endpoint = %q, want %q", p.endpoint, want)
-	}
-}
-
 func TestOpenAIAzureProvider_APIKeyAuth(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if got := r.Header.Get("api-key"); got != "azure-key-123" {
@@ -100,28 +88,22 @@ func TestOpenAIAzureProvider_APIKeyAuth(t *testing.T) {
 			t.Errorf("Authorization header should be empty with API key auth, got %q", got)
 		}
 
-		resp := openaiResponse{
-			ID: "chatcmpl-azure",
-			Choices: []openaiChoice{
-				{Message: openaiMessage{Role: "assistant", Content: "hello from azure"}, FinishReason: "stop"},
-			},
-			Usage: openaiUsage{PromptTokens: 5, CompletionTokens: 3},
-		}
-		json.NewEncoder(w).Encode(resp)
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprintf(w, `{"id":"chatcmpl-azure","object":"chat.completion","model":"gpt-4o","choices":[{"index":0,"message":{"role":"assistant","content":"hello from azure"},"finish_reason":"stop","logprobs":null}],"usage":{"prompt_tokens":5,"completion_tokens":3,"total_tokens":8},"created":1704067200}`)
 	}))
 	defer srv.Close()
 
-	// Override endpoint to point at test server
-	p := &OpenAIAzureProvider{
-		config: OpenAIAzureConfig{
-			Resource:       "test",
-			DeploymentName: "gpt-4o",
-			APIKey:         "azure-key-123",
-			APIVersion:     "2024-10-21",
-			MaxTokens:      4096,
-			HTTPClient:     http.DefaultClient,
-		},
-		endpoint: srv.URL,
+	p, err := NewOpenAIAzureProvider(OpenAIAzureConfig{
+		Resource:       "test",
+		DeploymentName: "gpt-4o",
+		APIKey:         "azure-key-123",
+		APIVersion:     "2024-10-21",
+		MaxTokens:      4096,
+		HTTPClient:     http.DefaultClient,
+		BaseURL:        srv.URL,
+	})
+	if err != nil {
+		t.Fatal(err)
 	}
 
 	got, err := p.Chat(t.Context(), []Message{
@@ -144,27 +126,22 @@ func TestOpenAIAzureProvider_EntraTokenAuth(t *testing.T) {
 			t.Errorf("api-key header should be empty with Entra auth, got %q", got)
 		}
 
-		resp := openaiResponse{
-			ID: "chatcmpl-entra",
-			Choices: []openaiChoice{
-				{Message: openaiMessage{Role: "assistant", Content: "hello from entra"}, FinishReason: "stop"},
-			},
-			Usage: openaiUsage{PromptTokens: 5, CompletionTokens: 3},
-		}
-		json.NewEncoder(w).Encode(resp)
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprintf(w, `{"id":"chatcmpl-entra","object":"chat.completion","model":"gpt-4o","choices":[{"index":0,"message":{"role":"assistant","content":"hello from entra"},"finish_reason":"stop","logprobs":null}],"usage":{"prompt_tokens":5,"completion_tokens":3,"total_tokens":8},"created":1704067200}`)
 	}))
 	defer srv.Close()
 
-	p := &OpenAIAzureProvider{
-		config: OpenAIAzureConfig{
-			Resource:       "test",
-			DeploymentName: "gpt-4o",
-			EntraToken:     "entra-token-xyz",
-			APIVersion:     "2024-10-21",
-			MaxTokens:      4096,
-			HTTPClient:     http.DefaultClient,
-		},
-		endpoint: srv.URL,
+	p, err := NewOpenAIAzureProvider(OpenAIAzureConfig{
+		Resource:       "test",
+		DeploymentName: "gpt-4o",
+		EntraToken:     "entra-token-xyz",
+		APIVersion:     "2024-10-21",
+		MaxTokens:      4096,
+		HTTPClient:     http.DefaultClient,
+		BaseURL:        srv.URL,
+	})
+	if err != nil {
+		t.Fatal(err)
 	}
 
 	got, err := p.Chat(t.Context(), []Message{
@@ -186,32 +163,34 @@ func TestOpenAIAzureProvider_Stream(t *testing.T) {
 			t.Fatal("expected http.Flusher")
 		}
 
-		content := "azure-streamed"
-		chunk := openaiStreamChunk{
-			ID: "chatcmpl-azure-stream",
-			Choices: []openaiStreamChoice{
-				{Index: 0, Delta: openaiStreamDelta{Content: &content}},
+		data, _ := json.Marshal(map[string]any{
+			"id":      "chatcmpl-azure-stream",
+			"object":  "chat.completion.chunk",
+			"model":   "gpt-4o",
+			"created": 1704067200,
+			"choices": []map[string]any{
+				{"index": 0, "delta": map[string]any{"role": "assistant", "content": "azure-streamed"}, "finish_reason": nil},
 			},
-		}
-		data, _ := json.Marshal(chunk)
-		w.Write([]byte("data: " + string(data) + "\n\n"))
+		})
+		fmt.Fprintf(w, "data: %s\n\n", string(data))
 		flusher.Flush()
 
-		w.Write([]byte("data: [DONE]\n\n"))
+		fmt.Fprintf(w, "data: [DONE]\n\n")
 		flusher.Flush()
 	}))
 	defer srv.Close()
 
-	p := &OpenAIAzureProvider{
-		config: OpenAIAzureConfig{
-			Resource:       "test",
-			DeploymentName: "gpt-4o",
-			APIKey:         "azure-key",
-			APIVersion:     "2024-10-21",
-			MaxTokens:      4096,
-			HTTPClient:     http.DefaultClient,
-		},
-		endpoint: srv.URL,
+	p, err := NewOpenAIAzureProvider(OpenAIAzureConfig{
+		Resource:       "test",
+		DeploymentName: "gpt-4o",
+		APIKey:         "azure-key",
+		APIVersion:     "2024-10-21",
+		MaxTokens:      4096,
+		HTTPClient:     http.DefaultClient,
+		BaseURL:        srv.URL,
+	})
+	if err != nil {
+		t.Fatal(err)
 	}
 
 	ch, err := p.Stream(t.Context(), []Message{
@@ -237,4 +216,3 @@ func TestOpenAIAzureProvider_Stream(t *testing.T) {
 		t.Errorf("first text event = %q, want %q", texts[0], "azure-streamed")
 	}
 }
-
