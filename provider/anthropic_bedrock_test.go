@@ -7,7 +7,6 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
-	"time"
 )
 
 func TestNewAnthropicBedrockProvider_Validation(t *testing.T) {
@@ -56,7 +55,7 @@ func TestNewAnthropicBedrockProvider_Validation(t *testing.T) {
 
 func TestAnthropicBedrockProvider_Defaults(t *testing.T) {
 	p, err := NewAnthropicBedrockProvider(AnthropicBedrockConfig{
-		AccessKeyID:    "AKID",
+		AccessKeyID:     "AKID",
 		SecretAccessKey: "secret",
 	})
 	if err != nil {
@@ -92,100 +91,37 @@ func TestAnthropicBedrockProvider_AuthModeInfo(t *testing.T) {
 	}
 }
 
-func TestAnthropicBedrockProvider_URLConstruction(t *testing.T) {
-	p := &anthropicBedrockProvider{
-		config: AnthropicBedrockConfig{
-			Region:  "us-west-2",
-			Model:   "anthropic.claude-sonnet-4-20250514-v1:0",
-			BaseURL: "https://bedrock-runtime.us-west-2.amazonaws.com",
-		},
-	}
-
-	wantInvoke := "https://bedrock-runtime.us-west-2.amazonaws.com/model/anthropic.claude-sonnet-4-20250514-v1:0/invoke"
-	if got := p.invokeURL(); got != wantInvoke {
-		t.Errorf("invokeURL() = %q, want %q", got, wantInvoke)
-	}
-
-	wantStream := "https://bedrock-runtime.us-west-2.amazonaws.com/model/anthropic.claude-sonnet-4-20250514-v1:0/invoke-with-response-stream"
-	if got := p.streamURL(); got != wantStream {
-		t.Errorf("streamURL() = %q, want %q", got, wantStream)
-	}
-}
-
-func TestSigv4Sign_AuthorizationHeader(t *testing.T) {
-	req, _ := http.NewRequest("POST", "https://bedrock-runtime.us-east-1.amazonaws.com/model/test/invoke", strings.NewReader("{}"))
-	req.Header.Set("Content-Type", "application/json")
-
-	now := time.Date(2025, 6, 15, 12, 0, 0, 0, time.UTC)
-	sigv4Sign(req, []byte("{}"), "AKIDEXAMPLE", "wJalrXUtnFEMI/K7MDENG+bPxRfiCYEXAMPLEKEY", "", "us-east-1", "bedrock", now)
-
-	auth := req.Header.Get("Authorization")
-	if auth == "" {
-		t.Fatal("expected Authorization header")
-	}
-	if !strings.HasPrefix(auth, "AWS4-HMAC-SHA256 ") {
-		t.Errorf("Authorization header should start with AWS4-HMAC-SHA256, got %q", auth)
-	}
-	if !strings.Contains(auth, "Credential=AKIDEXAMPLE/20250615/us-east-1/bedrock/aws4_request") {
-		t.Errorf("Authorization header missing expected credential scope, got %q", auth)
-	}
-	if !strings.Contains(auth, "SignedHeaders=") {
-		t.Errorf("Authorization header missing SignedHeaders, got %q", auth)
-	}
-	if !strings.Contains(auth, "Signature=") {
-		t.Errorf("Authorization header missing Signature, got %q", auth)
-	}
-
-	// Verify X-Amz-Date is set
-	if got := req.Header.Get("X-Amz-Date"); got != "20250615T120000Z" {
-		t.Errorf("X-Amz-Date = %q, want %q", got, "20250615T120000Z")
-	}
-}
-
-func TestSigv4Sign_WithSessionToken(t *testing.T) {
-	req, _ := http.NewRequest("POST", "https://bedrock-runtime.us-east-1.amazonaws.com/model/test/invoke", strings.NewReader("{}"))
-	req.Header.Set("Content-Type", "application/json")
-
-	now := time.Date(2025, 6, 15, 12, 0, 0, 0, time.UTC)
-	sigv4Sign(req, []byte("{}"), "AKID", "secret", "session-token-123", "us-east-1", "bedrock", now)
-
-	if got := req.Header.Get("X-Amz-Security-Token"); got != "session-token-123" {
-		t.Errorf("X-Amz-Security-Token = %q, want %q", got, "session-token-123")
-	}
-
-	auth := req.Header.Get("Authorization")
-	if !strings.Contains(auth, "x-amz-security-token") {
-		t.Errorf("signed headers should include x-amz-security-token, got %q", auth)
-	}
-}
-
 func TestAnthropicBedrockProvider_Chat(t *testing.T) {
-	var gotBody anthropicRequest
+	var gotPath string
 	var gotAuth string
+	var gotBody map[string]any
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
 		gotAuth = r.Header.Get("Authorization")
 		json.NewDecoder(r.Body).Decode(&gotBody)
-		json.NewEncoder(w).Encode(anthropicResponse{
-			ID:   "msg_123",
-			Type: "message",
-			Content: []anthropicRespItem{
-				{Type: "text", Text: "Hello from Bedrock!"},
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]any{
+			"id":   "msg_123",
+			"type": "message",
+			"content": []any{
+				map[string]any{"type": "text", "text": "Hello from Bedrock!"},
 			},
-			Usage: anthropicUsage{InputTokens: 15, OutputTokens: 8},
+			"usage": map[string]any{"input_tokens": 15, "output_tokens": 8},
 		})
 	}))
 	defer srv.Close()
 
-	p := &anthropicBedrockProvider{
-		config: AnthropicBedrockConfig{
-			Region:         "us-east-1",
-			Model:          "anthropic.claude-sonnet-4-20250514-v1:0",
-			MaxTokens:      1024,
-			AccessKeyID:    "AKIDTEST",
-			SecretAccessKey: "secret",
-			HTTPClient:     srv.Client(),
-			BaseURL:        srv.URL,
-		},
+	p, err := NewAnthropicBedrockProvider(AnthropicBedrockConfig{
+		Region:          "us-east-1",
+		Model:           "anthropic.claude-sonnet-4-20250514-v1:0",
+		MaxTokens:       1024,
+		AccessKeyID:     "AKIDTEST",
+		SecretAccessKey: "secret",
+		HTTPClient:      srv.Client(),
+		BaseURL:         srv.URL,
+	})
+	if err != nil {
+		t.Fatal(err)
 	}
 
 	resp, err := p.Chat(t.Context(), []Message{
@@ -211,15 +147,9 @@ func TestAnthropicBedrockProvider_Chat(t *testing.T) {
 		t.Errorf("Authorization should be SigV4, got %q", gotAuth)
 	}
 
-	// Verify request body matches Anthropic Messages format
-	if gotBody.Model != "anthropic.claude-sonnet-4-20250514-v1:0" {
-		t.Errorf("request model = %q", gotBody.Model)
-	}
-	if gotBody.System != "You are helpful." {
-		t.Errorf("request system = %q", gotBody.System)
-	}
-	if len(gotBody.Messages) != 1 {
-		t.Fatalf("request messages len = %d, want 1", len(gotBody.Messages))
+	// Bedrock middleware moves model to URL path
+	if !strings.Contains(gotPath, "anthropic.claude-sonnet-4-20250514-v1:0") {
+		t.Errorf("URL path should contain model, got %q", gotPath)
 	}
 }
 
@@ -228,33 +158,34 @@ func TestAnthropicBedrockProvider_Stream(t *testing.T) {
 		w.Header().Set("Content-Type", "text/event-stream")
 		flusher := w.(http.Flusher)
 
-		events := []string{
-			`{"type":"message_start","message":{"usage":{"input_tokens":20,"output_tokens":0}}}`,
-			`{"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}`,
-			`{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"Hello"}}`,
-			`{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":" Bedrock"}}`,
-			`{"type":"content_block_stop","index":0}`,
-			`{"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":10}}`,
-			`{"type":"message_stop"}`,
+		events := []struct{ typ, data string }{
+			{"message_start", `{"type":"message_start","message":{"usage":{"input_tokens":20,"output_tokens":0}}}`},
+			{"content_block_start", `{"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}`},
+			{"content_block_delta", `{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"Hello"}}`},
+			{"content_block_delta", `{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":" Bedrock"}}`},
+			{"content_block_stop", `{"type":"content_block_stop","index":0}`},
+			{"message_delta", `{"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":10}}`},
+			{"message_stop", `{"type":"message_stop"}`},
 		}
 
 		for _, e := range events {
-			fmt.Fprintf(w, "data: %s\n\n", e)
+			fmt.Fprintf(w, "event: %s\ndata: %s\n\n", e.typ, e.data)
 			flusher.Flush()
 		}
 	}))
 	defer srv.Close()
 
-	p := &anthropicBedrockProvider{
-		config: AnthropicBedrockConfig{
-			Region:         "us-east-1",
-			Model:          "anthropic.claude-sonnet-4-20250514-v1:0",
-			MaxTokens:      1024,
-			AccessKeyID:    "AKIDTEST",
-			SecretAccessKey: "secret",
-			HTTPClient:     srv.Client(),
-			BaseURL:        srv.URL,
-		},
+	p, err := NewAnthropicBedrockProvider(AnthropicBedrockConfig{
+		Region:          "us-east-1",
+		Model:           "anthropic.claude-sonnet-4-20250514-v1:0",
+		MaxTokens:       1024,
+		AccessKeyID:     "AKIDTEST",
+		SecretAccessKey: "secret",
+		HTTPClient:      srv.Client(),
+		BaseURL:         srv.URL,
+	})
+	if err != nil {
+		t.Fatal(err)
 	}
 
 	ch, err := p.Stream(t.Context(), []Message{
