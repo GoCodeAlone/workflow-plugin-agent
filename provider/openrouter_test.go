@@ -2,6 +2,7 @@ package provider
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -57,15 +58,8 @@ func TestOpenRouterProvider_Chat(t *testing.T) {
 			t.Errorf("Authorization header = %q, want %q", got, "Bearer test-key")
 		}
 
-		resp := openaiResponse{
-			ID: "chatcmpl-test",
-			Choices: []openaiChoice{
-				{Message: openaiMessage{Role: "assistant", Content: "hello from openrouter"}, FinishReason: "stop"},
-			},
-			Usage: openaiUsage{PromptTokens: 10, CompletionTokens: 5},
-		}
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(resp)
+		fmt.Fprintf(w, `{"id":"chatcmpl-test","object":"chat.completion","model":"gpt-4o","choices":[{"index":0,"message":{"role":"assistant","content":"hello from openrouter"},"finish_reason":"stop","logprobs":null}],"usage":{"prompt_tokens":10,"completion_tokens":5,"total_tokens":15},"created":1704067200}`)
 	}))
 	defer srv.Close()
 
@@ -97,18 +91,19 @@ func TestOpenRouterProvider_Stream(t *testing.T) {
 			t.Fatal("expected http.Flusher")
 		}
 
-		content := "streamed"
-		chunk := openaiStreamChunk{
-			ID: "chatcmpl-stream",
-			Choices: []openaiStreamChoice{
-				{Index: 0, Delta: openaiStreamDelta{Content: &content}},
+		data, _ := json.Marshal(map[string]any{
+			"id":      "chatcmpl-stream",
+			"object":  "chat.completion.chunk",
+			"model":   "gpt-4o",
+			"created": 1704067200,
+			"choices": []map[string]any{
+				{"index": 0, "delta": map[string]any{"role": "assistant", "content": "streamed"}, "finish_reason": nil},
 			},
-		}
-		data, _ := json.Marshal(chunk)
-		w.Write([]byte("data: " + string(data) + "\n\n"))
+		})
+		fmt.Fprintf(w, "data: %s\n\n", string(data))
 		flusher.Flush()
 
-		w.Write([]byte("data: [DONE]\n\n"))
+		fmt.Fprintf(w, "data: [DONE]\n\n")
 		flusher.Flush()
 	}))
 	defer srv.Close()
