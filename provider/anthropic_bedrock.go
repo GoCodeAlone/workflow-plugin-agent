@@ -102,7 +102,7 @@ func (p *anthropicBedrockProvider) Chat(ctx context.Context, messages []Message,
 	if err != nil {
 		return nil, fmt.Errorf("anthropic_bedrock: %w", err)
 	}
-	return fromAnthropicMessage(msg), nil
+	return fromAnthropicMessage(msg)
 }
 
 func (p *anthropicBedrockProvider) Stream(ctx context.Context, messages []Message, tools []ToolDef) (<-chan StreamEvent, error) {

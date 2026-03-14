@@ -3,6 +3,7 @@ package provider
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"strings"
 
 	anthropic "github.com/anthropics/anthropic-sdk-go"
@@ -27,8 +28,25 @@ func toAnthropicParams(model string, maxTokens int, messages []Message, tools []
 			continue
 		}
 		if msg.Role == RoleAssistant {
+			var blocks []anthropic.ContentBlockParamUnion
+			if msg.Content != "" {
+				blocks = append(blocks, anthropic.NewTextBlock(msg.Content))
+			}
+			for _, tc := range msg.ToolCalls {
+				inputJSON, _ := json.Marshal(tc.Arguments)
+				blocks = append(blocks, anthropic.ContentBlockParamUnion{
+					OfToolUse: &anthropic.ToolUseBlockParam{
+						ID:    tc.ID,
+						Name:  tc.Name,
+						Input: inputJSON,
+					},
+				})
+			}
+			if len(blocks) == 0 {
+				blocks = append(blocks, anthropic.NewTextBlock(""))
+			}
 			params.Messages = append(params.Messages,
-				anthropic.NewAssistantMessage(anthropic.NewTextBlock(msg.Content)),
+				anthropic.NewAssistantMessage(blocks...),
 			)
 		} else {
 			params.Messages = append(params.Messages,
@@ -55,7 +73,7 @@ func toAnthropicParams(model string, maxTokens int, messages []Message, tools []
 }
 
 // fromAnthropicMessage converts an SDK Message to a provider Response.
-func fromAnthropicMessage(msg *anthropic.Message) *Response {
+func fromAnthropicMessage(msg *anthropic.Message) (*Response, error) {
 	resp := &Response{
 		Usage: Usage{
 			InputTokens:  int(msg.Usage.InputTokens),
@@ -70,7 +88,9 @@ func fromAnthropicMessage(msg *anthropic.Message) *Response {
 		case "tool_use":
 			var args map[string]any
 			if len(block.Input) > 0 {
-				_ = json.Unmarshal(block.Input, &args)
+				if err := json.Unmarshal(block.Input, &args); err != nil {
+					return nil, fmt.Errorf("anthropic: unmarshal tool call arguments for %q: %w", block.Name, err)
+				}
 			}
 			resp.ToolCalls = append(resp.ToolCalls, ToolCall{
 				ID:        block.ID,
@@ -80,7 +100,7 @@ func fromAnthropicMessage(msg *anthropic.Message) *Response {
 		}
 	}
 	resp.Content = strings.Join(textParts, "")
-	return resp
+	return resp, nil
 }
 
 // streamAnthropicEvents reads SDK stream events and sends them to ch.
@@ -120,7 +140,10 @@ func streamAnthropicEvents(stream *ssestream.Stream[anthropic.MessageStreamEvent
 			if currentToolID != "" {
 				var args map[string]any
 				if toolInputBuf.Len() > 0 {
-					_ = json.Unmarshal(toolInputBuf.Bytes(), &args)
+					if err := json.Unmarshal(toolInputBuf.Bytes(), &args); err != nil {
+						ch <- StreamEvent{Type: "error", Error: fmt.Sprintf("anthropic: unmarshal tool call arguments for %q: %v", currentToolName, err)}
+						return
+					}
 				}
 				ch <- StreamEvent{
 					Type: "tool_call",

@@ -306,7 +306,9 @@ func foundryReadSSE(body io.ReadCloser, ch chan<- StreamEvent) {
 			if currentToolID != "" {
 				var args map[string]any
 				if toolInputBuf.Len() > 0 {
-					_ = json.Unmarshal(toolInputBuf.Bytes(), &args)
+					if err := json.Unmarshal(toolInputBuf.Bytes(), &args); err != nil {
+						ch <- StreamEvent{Type: "error", Error: fmt.Sprintf("tool %s: malformed arguments: %v", currentToolName, err)}
+					}
 				}
 				ch <- StreamEvent{
 					Type: "tool_call",
@@ -334,5 +336,9 @@ func foundryReadSSE(body io.ReadCloser, ch chan<- StreamEvent) {
 			ch <- StreamEvent{Type: "error", Error: data}
 			return
 		}
+	}
+
+	if err := scanner.Err(); err != nil {
+		ch <- StreamEvent{Type: "error", Error: fmt.Sprintf("foundry stream read: %v", err)}
 	}
 }

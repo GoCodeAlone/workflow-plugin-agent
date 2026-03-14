@@ -71,7 +71,7 @@ func (p *AnthropicProvider) Chat(ctx context.Context, messages []Message, tools 
 	if err != nil {
 		return nil, fmt.Errorf("anthropic: %w", err)
 	}
-	return fromAnthropicMessage(msg), nil
+	return fromAnthropicMessage(msg)
 }
 
 func (p *AnthropicProvider) Stream(ctx context.Context, messages []Message, tools []ToolDef) (<-chan StreamEvent, error) {
