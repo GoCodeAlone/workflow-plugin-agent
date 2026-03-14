@@ -45,6 +45,8 @@ func ListModels(ctx context.Context, providerType, apiKey, baseURL string) ([]Mo
 		return vertexFallbackModels(), nil
 	case "anthropic_foundry":
 		return foundryFallbackModels(), nil
+	case "gemini":
+		return listGeminiModels(ctx, apiKey)
 	case "cohere":
 		return listCohereModels(ctx, apiKey, baseURL)
 	case "mock":
