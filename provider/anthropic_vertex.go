@@ -1,14 +1,16 @@
 package provider
 
 import (
-	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
-	"strings"
+
+	anthropic "github.com/anthropics/anthropic-sdk-go"
+	"github.com/anthropics/anthropic-sdk-go/option"
+	"github.com/anthropics/anthropic-sdk-go/vertex"
 
 	"golang.org/x/oauth2"
 	"golang.org/x/oauth2/google"
@@ -41,8 +43,8 @@ type AnthropicVertexConfig struct {
 
 // anthropicVertexProvider accesses Anthropic models via Google Vertex AI.
 type anthropicVertexProvider struct {
-	config      AnthropicVertexConfig
-	tokenSource oauth2.TokenSource
+	client anthropic.Client
+	config AnthropicVertexConfig
 }
 
 // NewAnthropicVertexProvider creates a provider that accesses Claude via Google Vertex AI.
@@ -65,27 +67,35 @@ func NewAnthropicVertexProvider(cfg AnthropicVertexConfig) (*anthropicVertexProv
 		cfg.HTTPClient = http.DefaultClient
 	}
 
-	var ts oauth2.TokenSource
+	var client anthropic.Client
+
+	baseURL := fmt.Sprintf("https://%s-aiplatform.googleapis.com/", cfg.Region)
+
 	if cfg.TokenSource != nil {
-		ts = cfg.TokenSource
+		// Testing / custom-auth path: use middleware for token injection and path rewriting.
+		client = anthropic.NewClient(
+			option.WithBaseURL(baseURL),
+			option.WithHTTPClient(cfg.HTTPClient),
+			option.WithMiddleware(vertexPathRewriteMiddleware(cfg.Region, cfg.ProjectID)),
+			option.WithMiddleware(vertexBearerTokenMiddleware(cfg.TokenSource)),
+		)
 	} else if cfg.CredentialsJSON != "" {
-		creds, err := google.CredentialsFromJSON(context.Background(), []byte(cfg.CredentialsJSON), "https://www.googleapis.com/auth/cloud-platform")
+		creds, err := google.CredentialsFromJSON(context.Background(), []byte(cfg.CredentialsJSON),
+			"https://www.googleapis.com/auth/cloud-platform")
 		if err != nil {
 			return nil, fmt.Errorf("anthropic_vertex: parse credentials JSON: %w", err)
 		}
-		ts = creds.TokenSource
+		client = anthropic.NewClient(
+			vertex.WithCredentials(context.Background(), cfg.Region, cfg.ProjectID, creds),
+		)
 	} else {
-		creds, err := google.FindDefaultCredentials(context.Background(), "https://www.googleapis.com/auth/cloud-platform")
-		if err != nil {
-			return nil, fmt.Errorf("anthropic_vertex: find default credentials: %w", err)
-		}
-		ts = creds.TokenSource
+		client = anthropic.NewClient(
+			vertex.WithGoogleAuth(context.Background(), cfg.Region, cfg.ProjectID,
+				"https://www.googleapis.com/auth/cloud-platform"),
+		)
 	}
 
-	return &anthropicVertexProvider{
-		config:      cfg,
-		tokenSource: ts,
-	}, nil
+	return &anthropicVertexProvider{client: client, config: cfg}, nil
 }
 
 func (p *anthropicVertexProvider) Name() string { return "anthropic_vertex" }
@@ -100,280 +110,79 @@ func (p *anthropicVertexProvider) AuthModeInfo() AuthModeInfo {
 	}
 }
 
-func (p *anthropicVertexProvider) vertexURL(stream bool) string {
-	suffix := ":rawPredict"
-	if stream {
-		suffix = ":streamRawPredict"
-	}
-	return fmt.Sprintf("https://%s-aiplatform.googleapis.com/v1/projects/%s/locations/%s/publishers/anthropic/models/%s%s",
-		p.config.Region, p.config.ProjectID, p.config.Region, p.config.Model, suffix)
-}
-
 func (p *anthropicVertexProvider) Chat(ctx context.Context, messages []Message, tools []ToolDef) (*Response, error) {
-	reqBody := vertexBuildRequest(p.config.Model, p.config.MaxTokens, messages, tools, false)
-
-	data, err := json.Marshal(reqBody)
+	params := toAnthropicParams(p.config.Model, p.config.MaxTokens, messages, tools)
+	msg, err := p.client.Messages.New(ctx, params)
 	if err != nil {
-		return nil, fmt.Errorf("anthropic_vertex: marshal request: %w", err)
+		return nil, fmt.Errorf("anthropic_vertex: %w", err)
 	}
-
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, p.vertexURL(false), bytes.NewReader(data))
-	if err != nil {
-		return nil, fmt.Errorf("anthropic_vertex: create request: %w", err)
-	}
-	if err := p.setHeaders(req); err != nil {
-		return nil, err
-	}
-
-	resp, err := p.config.HTTPClient.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("anthropic_vertex: send request: %w", err)
-	}
-	defer func() { _ = resp.Body.Close() }()
-
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, fmt.Errorf("anthropic_vertex: read response: %w", err)
-	}
-
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("anthropic_vertex: API error (status %d): %s", resp.StatusCode, string(body))
-	}
-
-	var apiResp anthropicResponse
-	if err := json.Unmarshal(body, &apiResp); err != nil {
-		return nil, fmt.Errorf("anthropic_vertex: unmarshal response: %w", err)
-	}
-
-	if apiResp.Error != nil {
-		return nil, fmt.Errorf("anthropic_vertex: %s: %s", apiResp.Error.Type, apiResp.Error.Message)
-	}
-
-	return vertexParseResponse(&apiResp), nil
+	return fromAnthropicMessage(msg), nil
 }
 
 func (p *anthropicVertexProvider) Stream(ctx context.Context, messages []Message, tools []ToolDef) (<-chan StreamEvent, error) {
-	reqBody := vertexBuildRequest(p.config.Model, p.config.MaxTokens, messages, tools, true)
-
-	data, err := json.Marshal(reqBody)
-	if err != nil {
-		return nil, fmt.Errorf("anthropic_vertex: marshal request: %w", err)
+	params := toAnthropicParams(p.config.Model, p.config.MaxTokens, messages, tools)
+	stream := p.client.Messages.NewStreaming(ctx, params)
+	if stream.Err() != nil {
+		return nil, fmt.Errorf("anthropic_vertex: %w", stream.Err())
 	}
-
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, p.vertexURL(true), bytes.NewReader(data))
-	if err != nil {
-		return nil, fmt.Errorf("anthropic_vertex: create request: %w", err)
-	}
-	if err := p.setHeaders(req); err != nil {
-		return nil, err
-	}
-
-	resp, err := p.config.HTTPClient.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("anthropic_vertex: send request: %w", err)
-	}
-
-	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
-		_ = resp.Body.Close()
-		return nil, fmt.Errorf("anthropic_vertex: API error (status %d): %s", resp.StatusCode, string(body))
-	}
-
 	ch := make(chan StreamEvent, 16)
-	go vertexReadSSE(resp.Body, ch)
+	go streamAnthropicEvents(stream, ch)
 	return ch, nil
 }
 
-func (p *anthropicVertexProvider) setHeaders(req *http.Request) error {
-	token, err := p.tokenSource.Token()
-	if err != nil {
-		return fmt.Errorf("anthropic_vertex: get token: %w", err)
+// vertexPathRewriteMiddleware rewrites /v1/messages to the Vertex AI model path.
+func vertexPathRewriteMiddleware(region, projectID string) option.Middleware {
+	return func(r *http.Request, next option.MiddlewareNext) (*http.Response, error) {
+		if r.Body == nil || r.URL.Path != "/v1/messages" || r.Method != http.MethodPost {
+			return next(r)
+		}
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			return nil, err
+		}
+		r.Body.Close()
+
+		var params struct {
+			Model  string `json:"model"`
+			Stream bool   `json:"stream"`
+		}
+		_ = json.Unmarshal(body, &params)
+
+		// Remove model and stream from body (Vertex uses URL path instead)
+		var m map[string]any
+		_ = json.Unmarshal(body, &m)
+		delete(m, "model")
+		delete(m, "stream")
+		body, _ = json.Marshal(m)
+
+		specifier := "rawPredict"
+		if params.Stream {
+			specifier = "streamRawPredict"
+		}
+		r.URL.Path = fmt.Sprintf("/v1/projects/%s/locations/%s/publishers/anthropic/models/%s:%s",
+			projectID, region, params.Model, specifier)
+
+		reader := bytes.NewReader(body)
+		r.Body = io.NopCloser(reader)
+		r.GetBody = func() (io.ReadCloser, error) {
+			_, _ = reader.Seek(0, 0)
+			return io.NopCloser(reader), nil
+		}
+		r.ContentLength = int64(len(body))
+
+		return next(r)
 	}
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "Bearer "+token.AccessToken)
-	req.Header.Set("anthropic-version", anthropicAPIVersion)
-	return nil
 }
 
-func vertexBuildRequest(model string, maxTokens int, messages []Message, tools []ToolDef, stream bool) *anthropicRequest {
-	req := &anthropicRequest{
-		Model:     model,
-		MaxTokens: maxTokens,
-		Stream:    stream,
-	}
-
-	var apiMessages []anthropicMessage
-	for _, msg := range messages {
-		if msg.Role == RoleSystem {
-			req.System = msg.Content
-			continue
+// vertexBearerTokenMiddleware adds a GCP Bearer token to each request.
+func vertexBearerTokenMiddleware(ts oauth2.TokenSource) option.Middleware {
+	return func(r *http.Request, next option.MiddlewareNext) (*http.Response, error) {
+		token, err := ts.Token()
+		if err != nil {
+			return nil, fmt.Errorf("anthropic_vertex: get token: %w", err)
 		}
-		if msg.Role == RoleTool {
-			apiMessages = append(apiMessages, anthropicMessage{
-				Role: "user",
-				Content: []anthropicContent{
-					{
-						Type:      "tool_result",
-						ToolUseID: msg.ToolCallID,
-						Content:   msg.Content,
-					},
-				},
-			})
-			continue
-		}
-		apiMessages = append(apiMessages, anthropicMessage{
-			Role:    string(msg.Role),
-			Content: msg.Content,
-		})
-	}
-	req.Messages = apiMessages
-
-	for _, t := range tools {
-		schema := t.Parameters
-		if schema == nil {
-			schema = map[string]any{"type": "object", "properties": map[string]any{}}
-		}
-		req.Tools = append(req.Tools, anthropicTool{
-			Name:        t.Name,
-			Description: t.Description,
-			InputSchema: schema,
-		})
-	}
-
-	return req
-}
-
-func vertexParseResponse(apiResp *anthropicResponse) *Response {
-	resp := &Response{
-		Usage: Usage{
-			InputTokens:  apiResp.Usage.InputTokens,
-			OutputTokens: apiResp.Usage.OutputTokens,
-		},
-	}
-
-	var textParts []string
-	for _, item := range apiResp.Content {
-		switch item.Type {
-		case "text":
-			textParts = append(textParts, item.Text)
-		case "tool_use":
-			resp.ToolCalls = append(resp.ToolCalls, ToolCall{
-				ID:        item.ID,
-				Name:      item.Name,
-				Arguments: item.Input,
-			})
-		}
-	}
-	resp.Content = strings.Join(textParts, "")
-
-	return resp
-}
-
-func vertexReadSSE(body io.ReadCloser, ch chan<- StreamEvent) {
-	defer func() { _ = body.Close() }()
-	defer close(ch)
-
-	scanner := bufio.NewScanner(body)
-
-	var currentToolID, currentToolName string
-	var toolInputBuf bytes.Buffer
-	var usage *Usage
-
-	for scanner.Scan() {
-		line := scanner.Text()
-
-		if !strings.HasPrefix(line, "data: ") {
-			continue
-		}
-
-		data := strings.TrimPrefix(line, "data: ")
-		if data == "[DONE]" {
-			break
-		}
-
-		var event struct {
-			Type         string `json:"type"`
-			Index        int    `json:"index"`
-			ContentBlock *struct {
-				Type string `json:"type"`
-				ID   string `json:"id"`
-				Name string `json:"name"`
-				Text string `json:"text"`
-			} `json:"content_block"`
-			Delta *struct {
-				Type        string `json:"type"`
-				Text        string `json:"text"`
-				PartialJSON string `json:"partial_json"`
-				StopReason  string `json:"stop_reason"`
-			} `json:"delta"`
-			Message *struct {
-				Usage anthropicUsage `json:"usage"`
-			} `json:"message"`
-			Usage *anthropicUsage `json:"usage"`
-		}
-
-		if err := json.Unmarshal([]byte(data), &event); err != nil {
-			continue
-		}
-
-		switch event.Type {
-		case "message_start":
-			if event.Message != nil {
-				usage = &Usage{
-					InputTokens:  event.Message.Usage.InputTokens,
-					OutputTokens: event.Message.Usage.OutputTokens,
-				}
-			}
-
-		case "content_block_start":
-			if event.ContentBlock != nil && event.ContentBlock.Type == "tool_use" {
-				currentToolID = event.ContentBlock.ID
-				currentToolName = event.ContentBlock.Name
-				toolInputBuf.Reset()
-			}
-
-		case "content_block_delta":
-			if event.Delta == nil {
-				continue
-			}
-			switch event.Delta.Type {
-			case "text_delta":
-				ch <- StreamEvent{Type: "text", Text: event.Delta.Text}
-			case "input_json_delta":
-				toolInputBuf.WriteString(event.Delta.PartialJSON)
-			}
-
-		case "content_block_stop":
-			if currentToolID != "" {
-				var args map[string]any
-				if toolInputBuf.Len() > 0 {
-					_ = json.Unmarshal(toolInputBuf.Bytes(), &args)
-				}
-				ch <- StreamEvent{
-					Type: "tool_call",
-					Tool: &ToolCall{
-						ID:        currentToolID,
-						Name:      currentToolName,
-						Arguments: args,
-					},
-				}
-				currentToolID = ""
-				currentToolName = ""
-				toolInputBuf.Reset()
-			}
-
-		case "message_delta":
-			if event.Usage != nil && usage != nil {
-				usage.OutputTokens = event.Usage.OutputTokens
-			}
-
-		case "message_stop":
-			ch <- StreamEvent{Type: "done", Usage: usage}
-			return
-
-		case "error":
-			ch <- StreamEvent{Type: "error", Error: data}
-			return
-		}
+		r.Header.Set("Authorization", "Bearer "+token.AccessToken)
+		r.Header.Set("anthropic-version", anthropicAPIVersion)
+		return next(r)
 	}
 }

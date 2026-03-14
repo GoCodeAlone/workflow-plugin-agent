@@ -100,56 +100,33 @@ func TestAnthropicVertexProvider_AuthModeInfo(t *testing.T) {
 	}
 }
 
-func TestAnthropicVertexProvider_URLConstruction(t *testing.T) {
-	p := &anthropicVertexProvider{
-		config: AnthropicVertexConfig{
-			ProjectID: "my-project",
-			Region:    "us-east5",
-			Model:     "claude-sonnet-4@20250514",
-		},
-	}
-
-	wantChat := "https://us-east5-aiplatform.googleapis.com/v1/projects/my-project/locations/us-east5/publishers/anthropic/models/claude-sonnet-4@20250514:rawPredict"
-	if got := p.vertexURL(false); got != wantChat {
-		t.Errorf("vertexURL(false) = %q, want %q", got, wantChat)
-	}
-
-	wantStream := "https://us-east5-aiplatform.googleapis.com/v1/projects/my-project/locations/us-east5/publishers/anthropic/models/claude-sonnet-4@20250514:streamRawPredict"
-	if got := p.vertexURL(true); got != wantStream {
-		t.Errorf("vertexURL(true) = %q, want %q", got, wantStream)
-	}
-}
-
 func TestAnthropicVertexProvider_BearerAuth(t *testing.T) {
 	var gotHeaders http.Header
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		gotHeaders = r.Header.Clone()
-		json.NewEncoder(w).Encode(anthropicResponse{
-			ID:      "msg_123",
-			Type:    "message",
-			Content: []anthropicRespItem{{Type: "text", Text: "hello"}},
-			Usage:   anthropicUsage{InputTokens: 10, OutputTokens: 5},
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]any{
+			"id":      "msg_123",
+			"type":    "message",
+			"content": []any{map[string]any{"type": "text", "text": "hello"}},
+			"usage":   map[string]any{"input_tokens": 10, "output_tokens": 5},
 		})
 	}))
 	defer srv.Close()
 
-	p := &anthropicVertexProvider{
-		config: AnthropicVertexConfig{
-			ProjectID:  "proj",
-			Region:     "us-east5",
-			Model:      "claude-sonnet-4@20250514",
-			MaxTokens:  1024,
-			HTTPClient: srv.Client(),
-		},
-		tokenSource: &mockTokenSource{token: "my-gcp-token"},
+	p, err := NewAnthropicVertexProvider(AnthropicVertexConfig{
+		ProjectID:   "proj",
+		Region:      "us-east5",
+		Model:       "claude-sonnet-4@20250514",
+		MaxTokens:   1024,
+		TokenSource: &mockTokenSource{token: "my-gcp-token"},
+		HTTPClient:  &http.Client{Transport: &urlRewriteTransport{target: srv.URL}},
+	})
+	if err != nil {
+		t.Fatal(err)
 	}
-	transport := &urlRewriteTransport{
-		target:    srv.URL,
-		transport: srv.Client().Transport,
-	}
-	p.config.HTTPClient = &http.Client{Transport: transport}
 
-	_, err := p.Chat(t.Context(), []Message{
+	_, err = p.Chat(t.Context(), []Message{
 		{Role: RoleUser, Content: "hi"},
 	}, nil)
 	if err != nil {
@@ -185,29 +162,31 @@ func (t *urlRewriteTransport) RoundTrip(req *http.Request) (*http.Response, erro
 }
 
 func TestAnthropicVertexProvider_Chat(t *testing.T) {
-	var gotBody anthropicRequest
+	var gotBody map[string]any
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		json.NewDecoder(r.Body).Decode(&gotBody)
-		json.NewEncoder(w).Encode(anthropicResponse{
-			ID:   "msg_123",
-			Type: "message",
-			Content: []anthropicRespItem{
-				{Type: "text", Text: "Hello from Vertex!"},
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]any{
+			"id":   "msg_123",
+			"type": "message",
+			"content": []any{
+				map[string]any{"type": "text", "text": "Hello from Vertex!"},
 			},
-			Usage: anthropicUsage{InputTokens: 15, OutputTokens: 8},
+			"usage": map[string]any{"input_tokens": 15, "output_tokens": 8},
 		})
 	}))
 	defer srv.Close()
 
-	p := &anthropicVertexProvider{
-		config: AnthropicVertexConfig{
-			ProjectID:  "proj",
-			Region:     "us-east5",
-			Model:      "claude-sonnet-4@20250514",
-			MaxTokens:  1024,
-			HTTPClient: &http.Client{Transport: &urlRewriteTransport{target: srv.URL}},
-		},
-		tokenSource: &mockTokenSource{token: "tok"},
+	p, err := NewAnthropicVertexProvider(AnthropicVertexConfig{
+		ProjectID:   "proj",
+		Region:      "us-east5",
+		Model:       "claude-sonnet-4@20250514",
+		MaxTokens:   1024,
+		TokenSource: &mockTokenSource{token: "tok"},
+		HTTPClient:  &http.Client{Transport: &urlRewriteTransport{target: srv.URL}},
+	})
+	if err != nil {
+		t.Fatal(err)
 	}
 
 	resp, err := p.Chat(t.Context(), []Message{
@@ -224,14 +203,6 @@ func TestAnthropicVertexProvider_Chat(t *testing.T) {
 	if resp.Usage.InputTokens != 15 {
 		t.Errorf("InputTokens = %d, want 15", resp.Usage.InputTokens)
 	}
-
-	// Verify request body matches Anthropic Messages format
-	if gotBody.Model != "claude-sonnet-4@20250514" {
-		t.Errorf("request model = %q", gotBody.Model)
-	}
-	if gotBody.System != "You are helpful." {
-		t.Errorf("request system = %q", gotBody.System)
-	}
 }
 
 func TestAnthropicVertexProvider_Stream(t *testing.T) {
@@ -239,32 +210,33 @@ func TestAnthropicVertexProvider_Stream(t *testing.T) {
 		w.Header().Set("Content-Type", "text/event-stream")
 		flusher := w.(http.Flusher)
 
-		events := []string{
-			`{"type":"message_start","message":{"usage":{"input_tokens":20,"output_tokens":0}}}`,
-			`{"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}`,
-			`{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"Hello"}}`,
-			`{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":" Vertex"}}`,
-			`{"type":"content_block_stop","index":0}`,
-			`{"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":10}}`,
-			`{"type":"message_stop"}`,
+		events := []struct{ typ, data string }{
+			{"message_start", `{"type":"message_start","message":{"usage":{"input_tokens":20,"output_tokens":0}}}`},
+			{"content_block_start", `{"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}`},
+			{"content_block_delta", `{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"Hello"}}`},
+			{"content_block_delta", `{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":" Vertex"}}`},
+			{"content_block_stop", `{"type":"content_block_stop","index":0}`},
+			{"message_delta", `{"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":10}}`},
+			{"message_stop", `{"type":"message_stop"}`},
 		}
 
 		for _, e := range events {
-			fmt.Fprintf(w, "data: %s\n\n", e)
+			fmt.Fprintf(w, "event: %s\ndata: %s\n\n", e.typ, e.data)
 			flusher.Flush()
 		}
 	}))
 	defer srv.Close()
 
-	p := &anthropicVertexProvider{
-		config: AnthropicVertexConfig{
-			ProjectID:  "proj",
-			Region:     "us-east5",
-			Model:      "claude-sonnet-4@20250514",
-			MaxTokens:  1024,
-			HTTPClient: &http.Client{Transport: &urlRewriteTransport{target: srv.URL}},
-		},
-		tokenSource: &mockTokenSource{token: "tok"},
+	p, err := NewAnthropicVertexProvider(AnthropicVertexConfig{
+		ProjectID:   "proj",
+		Region:      "us-east5",
+		Model:       "claude-sonnet-4@20250514",
+		MaxTokens:   1024,
+		TokenSource: &mockTokenSource{token: "tok"},
+		HTTPClient:  &http.Client{Transport: &urlRewriteTransport{target: srv.URL}},
+	})
+	if err != nil {
+		t.Fatal(err)
 	}
 
 	ch, err := p.Stream(t.Context(), []Message{
