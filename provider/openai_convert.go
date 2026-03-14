@@ -3,6 +3,7 @@ package provider
 import (
 	"encoding/json"
 	"fmt"
+	"sort"
 	"strings"
 
 	openaisdk "github.com/openai/openai-go"
@@ -160,7 +161,14 @@ func streamOpenAIEvents(stream openaiChunkStream, ch chan<- StreamEvent) {
 		return
 	}
 
-	for _, ptc := range pending {
+	indices := make([]int64, 0, len(pending))
+	for idx := range pending {
+		indices = append(indices, idx)
+	}
+	sort.Slice(indices, func(i, j int) bool { return indices[i] < indices[j] })
+
+	for _, idx := range indices {
+		ptc := pending[idx]
 		var args map[string]any
 		if ptc.argsBuf.Len() > 0 {
 			if err := json.Unmarshal([]byte(ptc.argsBuf.String()), &args); err != nil {
