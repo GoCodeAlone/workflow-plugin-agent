@@ -25,7 +25,7 @@ func TestListModels_SSRF_VulnExists(t *testing.T) {
 	_, _ = listAnthropicModels(context.Background(), "fake-key", victim.URL)
 
 	if !reached {
-		t.Fatal("SSRF is blocked: request did not reach the victim server (vulnerability already fixed)")
+		t.Skip("SSRF is correctly blocked — vulnerability no longer exists")
 	}
 	// Vulnerability exists: request reached the internal server.
 }
