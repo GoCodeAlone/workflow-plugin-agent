@@ -34,6 +34,16 @@ func (s *ProviderModelsStep) Execute(ctx context.Context, pc *module.PipelineCon
 		}, nil
 	}
 
+	if err := provider.ValidateBaseURL(baseURL); err != nil {
+		return &module.StepResult{
+			Output: map[string]any{
+				"success": false,
+				"error":   fmt.Sprintf("invalid base_url: %v", err),
+				"models":  []any{},
+			},
+		}, nil
+	}
+
 	models, err := provider.ListModels(ctx, providerType, apiKey, baseURL)
 	if err != nil {
 		return &module.StepResult{

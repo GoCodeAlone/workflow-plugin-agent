@@ -60,6 +60,9 @@ func ListModels(ctx context.Context, providerType, apiKey, baseURL string) ([]Mo
 
 // listAnthropicModels calls the Anthropic /v1/models endpoint.
 func listAnthropicModels(ctx context.Context, apiKey, baseURL string) ([]ModelInfo, error) {
+	if err := ValidateBaseURL(baseURL); err != nil {
+		return nil, err
+	}
 	if baseURL == "" {
 		baseURL = defaultAnthropicBaseURL
 	}
@@ -121,6 +124,9 @@ func listAnthropicModels(ctx context.Context, apiKey, baseURL string) ([]ModelIn
 
 // listOpenAIModels calls the OpenAI /v1/models endpoint.
 func listOpenAIModels(ctx context.Context, apiKey, baseURL string) ([]ModelInfo, error) {
+	if err := ValidateBaseURL(baseURL); err != nil {
+		return nil, err
+	}
 	if baseURL == "" {
 		baseURL = defaultOpenAIBaseURL
 	}
@@ -301,6 +307,9 @@ func copilotFallbackModels() []ModelInfo {
 
 // listCohereModels calls the Cohere /v1/models endpoint.
 func listCohereModels(ctx context.Context, apiKey, baseURL string) ([]ModelInfo, error) {
+	if err := ValidateBaseURL(baseURL); err != nil {
+		return cohereFallbackModels(), nil
+	}
 	if baseURL == "" {
 		baseURL = defaultCohereBaseURL
 	}
