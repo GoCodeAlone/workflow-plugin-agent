@@ -20,11 +20,23 @@ const llamaCppPinnedVersion = "b3447"
 var (
 	llamaServerGitHubAPI   = "https://api.github.com/repos/ggerganov/llama.cpp/releases/latest"
 	llamaServerDownloadURL = "" // empty = derive from GitHub API; set in tests
+	llamaCppCacheDir       = "" // empty = use default ~/.cache/...; set in tests
 )
 
+// ghRelease is the JSON response from the GitHub releases API.
+type ghRelease struct {
+	TagName string    `json:"tag_name"`
+	Assets  []ghAsset `json:"assets"`
+}
+
+// ghAsset represents a single downloadable asset in a GitHub release.
+type ghAsset struct {
+	Name               string `json:"name"`
+	BrowserDownloadURL string `json:"browser_download_url"`
+}
+
 // EnsureLlamaServer finds or downloads the llama-server binary.
-// Search order: PATH (checked by caller) → ~/.cache/workflow/llama-server/<version>/llama-server
-// Downloads from ggerganov/llama.cpp GitHub releases when not found in cache.
+// Search order: PATH (checked by caller) → cache dir → download from GitHub releases.
 func EnsureLlamaServer(ctx context.Context) (string, error) {
 	cacheDir, err := llamaServerCacheDir()
 	if err != nil {
@@ -66,8 +78,12 @@ func EnsureLlamaServer(ctx context.Context) (string, error) {
 	return cachedBin, nil
 }
 
-// llamaServerCacheDir returns ~/.cache/workflow/llama-server/<version>.
+// llamaServerCacheDir returns the cache directory for the llama-server binary.
+// Uses llamaCppCacheDir override when set (for tests), otherwise ~/.cache/workflow/llama-server/<version>.
 func llamaServerCacheDir() (string, error) {
+	if llamaCppCacheDir != "" {
+		return filepath.Join(llamaCppCacheDir, llamaCppPinnedVersion), nil
+	}
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return "", fmt.Errorf("llama_cpp_download: resolve home dir: %w", err)
@@ -98,39 +114,43 @@ func resolveLlamaServerURL(ctx context.Context) (url, version string, err error)
 		return "", "", fmt.Errorf("llama_cpp_download: GitHub API status %d", resp.StatusCode)
 	}
 
-	var release struct {
-		TagName string `json:"tag_name"`
-		Assets  []struct {
-			Name               string `json:"name"`
-			BrowserDownloadURL string `json:"browser_download_url"`
-		} `json:"assets"`
-	}
+	var release ghRelease
 	if err := json.NewDecoder(resp.Body).Decode(&release); err != nil {
 		return "", "", fmt.Errorf("llama_cpp_download: parse GitHub API response: %w", err)
 	}
 
-	assetSuffix := platformAssetSuffix()
-	for _, asset := range release.Assets {
-		if strings.HasSuffix(asset.Name, assetSuffix) {
-			return asset.BrowserDownloadURL, release.TagName, nil
-		}
+	assetURL, findErr := findAssetURL(release, runtime.GOOS, runtime.GOARCH)
+	if findErr != nil {
+		return "", "", findErr
 	}
-	return "", "", fmt.Errorf("llama_cpp_download: no asset matching %q for platform %s/%s in release %s",
-		assetSuffix, runtime.GOOS, runtime.GOARCH, release.TagName)
+	return assetURL, release.TagName, nil
 }
 
-// platformAssetSuffix returns the expected asset filename suffix for the current OS/arch.
-func platformAssetSuffix() string {
-	switch runtime.GOOS {
+// findAssetURL returns the browser_download_url for the asset matching goos/goarch.
+func findAssetURL(release ghRelease, goos, goarch string) (string, error) {
+	suffix := assetNameForPlatform(release.TagName, goos, goarch)
+	for _, asset := range release.Assets {
+		if strings.HasSuffix(asset.Name, suffix) {
+			return asset.BrowserDownloadURL, nil
+		}
+	}
+	return "", fmt.Errorf("llama_cpp_download: no asset matching suffix %q for platform %s/%s in release %s",
+		suffix, goos, goarch, release.TagName)
+}
+
+// assetNameForPlatform returns the expected asset filename suffix for the given OS/arch.
+func assetNameForPlatform(tag, goos, goarch string) string {
+	_ = tag // retained for future version-specific naming
+	switch goos {
 	case "darwin":
-		if runtime.GOARCH == "arm64" {
+		if goarch == "arm64" {
 			return "-bin-macos-arm64.zip"
 		}
 		return "-bin-macos-x64.zip"
 	case "windows":
 		return "-bin-win-avx-x64.zip"
 	default: // linux
-		if runtime.GOARCH == "arm64" {
+		if goarch == "arm64" {
 			return "-bin-linux-arm64.zip"
 		}
 		return "-bin-linux-amd64.zip"
