@@ -59,6 +59,7 @@ type Config struct {
 // Result is the outcome of an Execute call.
 type Result struct {
 	Content    string
+	Thinking   string
 	Iterations int
 	Status     string // "completed", "failed", "loop_detected", "approval_timeout", "request_expired"
 	Error      string
@@ -142,6 +143,7 @@ func Execute(ctx context.Context, cfg Config, systemPrompt, userTask, agentID st
 	}
 
 	var finalContent string
+	var finalThinking string
 	iterCount := 0
 	ld := NewLoopDetector(cfg.LoopDetection)
 	cm := NewContextManager(cfg.Provider.Name(), cfg.CompactionThreshold)
@@ -183,6 +185,7 @@ func Execute(ctx context.Context, cfg Config, systemPrompt, userTask, agentID st
 		}
 
 		finalContent = resp.Content
+		finalThinking = resp.Thinking
 
 		// Record assistant response
 		_ = cfg.Transcript.Record(ctx, TranscriptEntry{
@@ -193,6 +196,7 @@ func Execute(ctx context.Context, cfg Config, systemPrompt, userTask, agentID st
 			Iteration: iterCount,
 			Role:      provider.RoleAssistant,
 			Content:   resp.Content,
+			Thinking:  resp.Thinking,
 			ToolCalls: resp.ToolCalls,
 		})
 
@@ -341,6 +345,7 @@ func Execute(ctx context.Context, cfg Config, systemPrompt, userTask, agentID st
 
 	return &Result{
 		Content:    finalContent,
+		Thinking:   finalThinking,
 		Status:     "completed",
 		Iterations: iterCount,
 	}, nil

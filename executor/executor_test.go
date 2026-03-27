@@ -215,6 +215,70 @@ func TestExecute_NullApproverIsDefault(t *testing.T) {
 	}
 }
 
+// TestExecute_ThinkingInResult verifies Result.Thinking is populated from provider response.
+func TestExecute_ThinkingInResult(t *testing.T) {
+	p := &mockProvider{
+		name: "mock",
+		chatResponse: &provider.Response{
+			Content:  "The answer is 42.",
+			Thinking: "Let me reason through this carefully...",
+		},
+	}
+	result, err := Execute(context.Background(), Config{Provider: p}, "sys", "task", "agent-1")
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if result.Thinking != "Let me reason through this carefully..." {
+		t.Errorf("Thinking: want %q, got %q", "Let me reason through this carefully...", result.Thinking)
+	}
+	if result.Content != "The answer is 42." {
+		t.Errorf("Content: want %q, got %q", "The answer is 42.", result.Content)
+	}
+}
+
+// TestExecute_ThinkingInTranscript verifies transcript entries include thinking from provider response.
+func TestExecute_ThinkingInTranscript(t *testing.T) {
+	p := &mockProvider{
+		name: "mock",
+		chatResponse: &provider.Response{
+			Content:  "Done.",
+			Thinking: "Step-by-step reasoning here.",
+		},
+	}
+	recorder := &recordingTranscript{}
+	result, err := Execute(context.Background(), Config{
+		Provider:   p,
+		Transcript: recorder,
+	}, "sys", "task", "agent-1")
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if result.Thinking != "Step-by-step reasoning here." {
+		t.Errorf("Result.Thinking: want %q, got %q", "Step-by-step reasoning here.", result.Thinking)
+	}
+
+	var found bool
+	for _, entry := range recorder.entries {
+		if entry.Role == provider.RoleAssistant && entry.Thinking == "Step-by-step reasoning here." {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Error("expected an assistant transcript entry with Thinking populated")
+	}
+}
+
+// recordingTranscript captures all transcript entries for inspection.
+type recordingTranscript struct {
+	entries []TranscriptEntry
+}
+
+func (r *recordingTranscript) Record(_ context.Context, entry TranscriptEntry) error {
+	r.entries = append(r.entries, entry)
+	return nil
+}
+
 // --- test helpers ---
 
 // callCountProvider calls onChat for each Chat invocation.

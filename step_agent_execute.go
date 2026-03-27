@@ -188,6 +188,9 @@ func (s *AgentExecuteStep) Execute(ctx context.Context, pc *module.PipelineConte
 		"status":     result.Status,
 		"iterations": result.Iterations,
 	}
+	if result.Thinking != "" {
+		output["thinking"] = result.Thinking
+	}
 	if result.Error != "" {
 		output["error"] = result.Error
 	}
