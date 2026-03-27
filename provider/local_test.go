@@ -133,6 +133,46 @@ func TestStreamParserTextBeforeThink(t *testing.T) {
 	assertTextContains(t, events, "after")
 }
 
+func TestStreamParserNestedThinkTags(t *testing.T) {
+	// A nested <think> inside an open <think> block should be treated as
+	// literal thinking content — the parser does not recurse.
+	var p ThinkingStreamParser
+	events := collectEvents(&p, []string{"<think>outer<think>inner</think>rest"})
+	// The first </think> closes the block; "outer<think>inner" is the thinking.
+	got := joinThinking(events)
+	if !strings.Contains(got, "outer") {
+		t.Errorf("thinking=%q, should contain 'outer'", got)
+	}
+	if !strings.Contains(got, "inner") {
+		t.Errorf("thinking=%q, should contain 'inner'", got)
+	}
+	// Everything after </think> is text.
+	assertTextContains(t, events, "rest")
+}
+
+func TestStreamParserUnclosedTag(t *testing.T) {
+	// Feed a chunk with an opened <think> but no closing tag.
+	// The parser should stay in inThink state and emit thinking events
+	// for the safe (non-partial-tag) portion of the buffer.
+	var p ThinkingStreamParser
+	events := p.Feed("<think>partial content")
+	// Should emit the "partial content" as a thinking event (no close tag, no partial suffix).
+	thinking := joinThinking(events)
+	if thinking != "partial content" {
+		t.Errorf("thinking=%q, want %q", thinking, "partial content")
+	}
+	// No text events should be emitted.
+	if joinText(events) != "" {
+		t.Errorf("expected no text events, got %q", joinText(events))
+	}
+	// Parser should still be in thinking state — feeding more content continues as thinking.
+	more := p.Feed(" more")
+	morethinking := joinThinking(more)
+	if morethinking != " more" {
+		t.Errorf("continued thinking=%q, want %q", morethinking, " more")
+	}
+}
+
 // helpers
 
 func joinText(events []StreamEvent) string {
