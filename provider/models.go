@@ -49,6 +49,12 @@ func ListModels(ctx context.Context, providerType, apiKey, baseURL string) ([]Mo
 		return listGeminiModels(ctx, apiKey)
 	case "cohere":
 		return listCohereModels(ctx, apiKey, baseURL)
+	case "ollama":
+		return listOllamaModels(ctx, baseURL)
+	case "llama_cpp":
+		return []ModelInfo{
+			{ID: "local", Name: "llama.cpp Local Model"},
+		}, nil
 	case "mock":
 		return []ModelInfo{
 			{ID: "mock-default", Name: "Mock Provider"},
@@ -421,6 +427,12 @@ func foundryFallbackModels() []ModelInfo {
 		{ID: "claude-3-5-sonnet-20241022-v2", Name: "Claude 3.5 Sonnet v2"},
 		{ID: "claude-3-5-haiku-20241022", Name: "Claude 3.5 Haiku"},
 	}
+}
+
+// listOllamaModels lists models available on a local Ollama server.
+func listOllamaModels(ctx context.Context, baseURL string) ([]ModelInfo, error) {
+	p := NewOllamaProvider(OllamaConfig{BaseURL: baseURL})
+	return p.ListModels(ctx)
 }
 
 func truncate(s string, maxLen int) string {

@@ -28,5 +28,8 @@ func AllAuthModes() []AuthModeInfo {
 		{Mode: "github_models", DisplayName: "GitHub Models", Description: "Access AI models via GitHub's Models marketplace using a fine-grained PAT.", DocsURL: "https://docs.github.com/en/rest/models/inference", ServerSafe: true},
 		// Cohere
 		{Mode: "direct", DisplayName: "Cohere (Direct API)", Description: "Direct access to Cohere's Command models via API key.", DocsURL: "https://docs.cohere.com/reference/chat", ServerSafe: true},
+		// Local inference
+		LocalAuthMode("ollama", "Ollama (Local)"),
+		LocalAuthMode("llama_cpp", "llama.cpp (Local)"),
 	}
 }

@@ -33,7 +33,7 @@ func New() *AgentPlugin {
 				Author:      "GoCodeAlone",
 				Description: "AI agent primitives for workflow apps",
 				ModuleTypes: []string{"agent.provider"},
-				StepTypes:   []string{"step.agent_execute", "step.provider_test", "step.provider_models"},
+				StepTypes:   []string{"step.agent_execute", "step.provider_test", "step.provider_models", "step.model_pull"},
 				WiringHooks: []string{"agent.provider_registry"},
 			},
 		},
@@ -58,6 +58,7 @@ func (p *AgentPlugin) StepFactories() map[string]plugin.StepFactory {
 		"step.agent_execute":   newAgentExecuteStepFactory(),
 		"step.provider_test":   newProviderTestFactory(),
 		"step.provider_models": newProviderModelsFactory(),
+		"step.model_pull":      newModelPullStepFactory(),
 	}
 }
 
@@ -89,6 +90,13 @@ func NewProviderModelsFactory() plugin.StepFactory {
 	return newProviderModelsFactory()
 }
 
+// NewModelPullStepFactory returns the plugin.StepFactory for "step.model_pull".
+// Exported for use by host plugins that embed agent capabilities without loading
+// AgentPlugin as a standalone plugin.
+func NewModelPullStepFactory() plugin.StepFactory {
+	return newModelPullStepFactory()
+}
+
 // ProviderRegistryHook returns the wiring hook that creates the agent-provider-registry.
 // Exported for use by host plugins that embed agent capabilities without loading
 // AgentPlugin as a standalone plugin.
@@ -105,7 +113,7 @@ func (p *AgentPlugin) ModuleSchemas() []*schema.ModuleSchema {
 			Category:    "AI",
 			Description: "Wraps an AI provider (mock, test, anthropic, openai, copilot) as a module for agent execution.",
 			ConfigFields: []schema.ConfigFieldDef{
-				{Key: "provider", Label: "Provider Type", Type: schema.FieldTypeSelect, Options: []string{"mock", "test", "anthropic", "openai", "copilot"}, DefaultValue: "mock", Description: "AI provider backend"},
+				{Key: "provider", Label: "Provider Type", Type: schema.FieldTypeSelect, Options: []string{"mock", "test", "anthropic", "openai", "copilot", "ollama", "llama_cpp"}, DefaultValue: "mock", Description: "AI provider backend"},
 				{Key: "model", Label: "Model", Type: schema.FieldTypeString, Description: "Model identifier (e.g., claude-sonnet-4-20250514)"},
 				{Key: "api_key", Label: "API Key", Type: schema.FieldTypeString, Description: "API key for real providers"},
 				{Key: "base_url", Label: "Base URL", Type: schema.FieldTypeString, Description: "Optional base URL override"},
