@@ -68,6 +68,8 @@ func NewProviderRegistry(db *sql.DB, secretsProvider secrets.Provider) *Provider
 	r.factories["anthropic_vertex"] = anthropicVertexProviderFactory
 	r.factories["anthropic_bedrock"] = anthropicBedrockProviderFactory
 	r.factories["gemini"] = geminiProviderFactory
+	r.factories["ollama"] = ollamaProviderFactory
+	r.factories["llama_cpp"] = llamaCppProviderFactory
 
 	return r
 }
@@ -338,6 +340,23 @@ func geminiProviderFactory(apiKey string, cfg LLMProviderConfig) (provider.Provi
 		Model:     cfg.Model,
 		MaxTokens: cfg.MaxTokens,
 	})
+}
+
+func ollamaProviderFactory(_ string, cfg LLMProviderConfig) (provider.Provider, error) {
+	return provider.NewOllamaProvider(provider.OllamaConfig{
+		Model:     cfg.Model,
+		BaseURL:   cfg.BaseURL,
+		MaxTokens: cfg.MaxTokens,
+	}), nil
+}
+
+func llamaCppProviderFactory(_ string, cfg LLMProviderConfig) (provider.Provider, error) {
+	return provider.NewLlamaCppProvider(provider.LlamaCppConfig{
+		BaseURL:   cfg.BaseURL,
+		ModelPath: cfg.Model,
+		ModelName: cfg.Model,
+		MaxTokens: cfg.MaxTokens,
+	}), nil
 }
 
 func anthropicBedrockProviderFactory(apiKey string, cfg LLMProviderConfig) (provider.Provider, error) {

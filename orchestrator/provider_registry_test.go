@@ -323,6 +323,20 @@ func TestProviderRegistryVertexFactoryRegistered(t *testing.T) {
 	}
 }
 
+func TestProviderRegistry_HasOllamaFactory(t *testing.T) {
+	r := NewProviderRegistry(nil, nil)
+	if _, ok := r.factories["ollama"]; !ok {
+		t.Error("expected 'ollama' factory to be registered")
+	}
+}
+
+func TestProviderRegistry_HasLlamaCppFactory(t *testing.T) {
+	r := NewProviderRegistry(nil, nil)
+	if _, ok := r.factories["llama_cpp"]; !ok {
+		t.Error("expected 'llama_cpp' factory to be registered")
+	}
+}
+
 func TestProviderRegistryChatMock(t *testing.T) {
 	db := setupTestDB(t)
 	sec := &memSecretsProvider{data: map[string]string{}}
