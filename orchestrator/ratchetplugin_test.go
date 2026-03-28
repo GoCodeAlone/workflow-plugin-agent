@@ -1024,7 +1024,7 @@ func TestPlugin_StepFactories(t *testing.T) {
 	// factories since ratchetplugin absorbs the agent plugin to avoid duplicate step
 	// type registration. step.agent_execute remains here as ratchet's richer override.
 	expected := []string{
-		"step.agent_execute", "step.provider_test", "step.provider_models",
+		"step.agent_execute", "step.provider_test", "step.provider_models", "step.model_pull",
 		"step.workspace_init", "step.container_control",
 		"step.secret_manage", "step.vault_config",
 		"step.mcp_reload", "step.oauth_exchange",
