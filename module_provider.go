@@ -216,6 +216,8 @@ func newProviderModuleFactory() plugin.ModuleFactory {
 		case "llama_cpp":
 			p = provider.NewLlamaCppProvider(provider.LlamaCppConfig{
 				BaseURL:   baseURL,
+				ModelPath: model,
+				ModelName: model,
 				MaxTokens: maxTokens,
 			})
 

@@ -115,7 +115,7 @@ func (s *ModelPullStep) pullHuggingFace(ctx context.Context) (*module.StepResult
 		Output: map[string]any{
 			"status":     "downloaded",
 			"model_path": path,
-			"size_bytes": int(sizeBytes),
+			"size_bytes": sizeBytes,
 		},
 	}, nil
 }

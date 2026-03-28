@@ -33,7 +33,12 @@ func NewOllamaProvider(cfg OllamaConfig) *OllamaProvider {
 	if cfg.HTTPClient == nil {
 		cfg.HTTPClient = http.DefaultClient
 	}
-	base, _ := url.Parse(cfg.BaseURL)
+	base, err := url.Parse(cfg.BaseURL)
+	if err != nil {
+		// Fall back to default URL if configured one is invalid.
+		base, _ = url.Parse(defaultOllamaBaseURL)
+		cfg.BaseURL = defaultOllamaBaseURL
+	}
 	return &OllamaProvider{
 		client: ollamaapi.NewClient(base, cfg.HTTPClient),
 		config: cfg,

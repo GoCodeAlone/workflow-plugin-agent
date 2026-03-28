@@ -32,9 +32,15 @@ func DownloadHuggingFaceFile(ctx context.Context, repo, filename, outputDir stri
 		outputDir = filepath.Join(home, ".cache", "workflow", "models")
 	}
 
+	// Sanitize filename to prevent path traversal.
+	safeName := filepath.Base(filename)
+	if safeName != filename || strings.Contains(filename, "..") {
+		return "", fmt.Errorf("huggingface: invalid filename %q (must not contain path separators or '..')", filename)
+	}
+
 	repoSlug := strings.ReplaceAll(repo, "/", "--")
 	destDir := filepath.Join(outputDir, repoSlug)
-	destPath := filepath.Join(destDir, filename)
+	destPath := filepath.Join(destDir, safeName)
 
 	// Already downloaded — skip.
 	if _, err := os.Stat(destPath); err == nil {

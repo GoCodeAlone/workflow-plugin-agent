@@ -26,6 +26,7 @@ const (
 type LlamaCppConfig struct {
 	BaseURL     string // external mode: OpenAI-compatible server URL
 	ModelPath   string // managed mode: path to .gguf model file
+	ModelName   string // model name sent to server (external mode); defaults to "local"
 	BinaryPath  string // override llama-server binary location
 	GPULayers   int    // -ngl flag; 0 → default -1 (all layers)
 	ContextSize int    // -c flag; default 8192
@@ -80,6 +81,14 @@ func NewLlamaCppProvider(cfg LlamaCppConfig) *LlamaCppProvider {
 
 func (p *LlamaCppProvider) Name() string { return "llama_cpp" }
 
+// modelName returns the model identifier to send to the server.
+func (p *LlamaCppProvider) modelName() string {
+	if p.config.ModelName != "" {
+		return p.config.ModelName
+	}
+	return "local"
+}
+
 func (p *LlamaCppProvider) AuthModeInfo() AuthModeInfo {
 	return LocalAuthMode("llama_cpp", "llama.cpp (Local)")
 }
@@ -93,8 +102,7 @@ func (p *LlamaCppProvider) Chat(ctx context.Context, messages []Message, tools [
 	if len(tools) > 0 {
 		params.Tools = toOpenAITools(tools)
 	}
-	// llama-server requires a model field but ignores it; use a placeholder.
-	params.Model = shared.ChatModel("local")
+	params.Model = shared.ChatModel(p.modelName())
 
 	resp, err := p.client.Chat.Completions.New(ctx, params)
 	if err != nil {
@@ -117,7 +125,7 @@ func (p *LlamaCppProvider) Stream(ctx context.Context, messages []Message, tools
 	if len(tools) > 0 {
 		params.Tools = toOpenAITools(tools)
 	}
-	params.Model = shared.ChatModel("local")
+	params.Model = shared.ChatModel(p.modelName())
 
 	stream := p.client.Chat.Completions.NewStreaming(ctx, params)
 	rawCh := make(chan StreamEvent, 16)
@@ -186,13 +194,16 @@ func (p *LlamaCppProvider) ensureServer(ctx context.Context) error {
 		select {
 		case <-ctx.Done():
 			_ = p.cmd.Process.Kill()
+			_ = p.cmd.Wait()
 			return ctx.Err()
 		case <-ticker.C:
 			if time.Now().After(deadline) {
 				_ = p.cmd.Process.Kill()
+				_ = p.cmd.Wait()
 				return fmt.Errorf("llama_cpp: llama-server did not become healthy within timeout")
 			}
-			resp, err := p.config.HTTPClient.Get(healthURL) //nolint:noctx
+			hReq, _ := http.NewRequestWithContext(ctx, http.MethodGet, healthURL, nil)
+			resp, err := p.config.HTTPClient.Do(hReq)
 			if err == nil {
 				_ = resp.Body.Close()
 				if resp.StatusCode == http.StatusOK {
@@ -203,10 +214,12 @@ func (p *LlamaCppProvider) ensureServer(ctx context.Context) error {
 	}
 }
 
-// Close kills the managed llama-server process if one was started.
+// Close kills the managed llama-server process if one was started
+// and waits for it to exit to avoid zombie processes.
 func (p *LlamaCppProvider) Close() error {
 	if p.cmd != nil && p.cmd.Process != nil {
-		return p.cmd.Process.Kill()
+		_ = p.cmd.Process.Kill()
+		_ = p.cmd.Wait() // reap the child process
 	}
 	return nil
 }

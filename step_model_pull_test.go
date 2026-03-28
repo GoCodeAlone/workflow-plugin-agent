@@ -115,7 +115,7 @@ func TestModelPullStep_HuggingFace(t *testing.T) {
 	if result.Output["model_path"] == "" {
 		t.Error("expected non-empty model_path")
 	}
-	if result.Output["size_bytes"].(int) != len(content) {
+	if result.Output["size_bytes"].(int64) != int64(len(content)) {
 		t.Errorf("size_bytes: want %d, got %v", len(content), result.Output["size_bytes"])
 	}
 }

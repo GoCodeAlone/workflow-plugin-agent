@@ -18,7 +18,7 @@ import (
 const llamaCppPinnedVersion = "b3447"
 
 var (
-	llamaServerGitHubAPI   = "https://api.github.com/repos/ggerganov/llama.cpp/releases/latest"
+	llamaServerGitHubAPI   = "https://api.github.com/repos/ggerganov/llama.cpp/releases/tags/" + llamaCppPinnedVersion
 	llamaServerDownloadURL = "" // empty = derive from GitHub API; set in tests
 	llamaCppCacheDir       = "" // empty = use default ~/.cache/...; set in tests
 )
@@ -103,6 +103,7 @@ func resolveLlamaServerURL(ctx context.Context) (url, version string, err error)
 		return "", "", fmt.Errorf("llama_cpp_download: create GitHub API request: %w", err)
 	}
 	req.Header.Set("Accept", "application/vnd.github+json")
+	req.Header.Set("User-Agent", "workflow-plugin-agent")
 
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
