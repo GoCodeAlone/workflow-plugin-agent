@@ -86,6 +86,21 @@ func NewProviderRegistry(db *sql.DB, secretsProvider secrets.Provider) *Provider
 			MaxTokens: cfg.MaxTokens,
 		}), nil
 	}
+	r.Factories["ollama"] = func(_ string, cfg LLMProviderConfig) (provider.Provider, error) {
+		return provider.NewOllamaProvider(provider.OllamaConfig{
+			Model:     cfg.Model,
+			BaseURL:   cfg.BaseURL,
+			MaxTokens: cfg.MaxTokens,
+		}), nil
+	}
+	r.Factories["llama_cpp"] = func(_ string, cfg LLMProviderConfig) (provider.Provider, error) {
+		return provider.NewLlamaCppProvider(provider.LlamaCppConfig{
+			BaseURL:   cfg.BaseURL,
+			ModelPath: cfg.Model,
+			ModelName: cfg.Model,
+			MaxTokens: cfg.MaxTokens,
+		}), nil
+	}
 
 	return r
 }

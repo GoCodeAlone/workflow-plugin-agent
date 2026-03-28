@@ -17,6 +17,7 @@ type TranscriptEntry struct {
 	Iteration  int
 	Role       provider.Role
 	Content    string
+	Thinking   string
 	ToolCalls  []provider.ToolCall
 	ToolCallID string
 }

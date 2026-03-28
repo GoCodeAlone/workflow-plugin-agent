@@ -206,8 +206,23 @@ func newProviderModuleFactory() plugin.ModuleFactory {
 				MaxTokens: maxTokens,
 			})
 
+		case "ollama":
+			p = provider.NewOllamaProvider(provider.OllamaConfig{
+				Model:     model,
+				BaseURL:   baseURL,
+				MaxTokens: maxTokens,
+			})
+
+		case "llama_cpp":
+			p = provider.NewLlamaCppProvider(provider.LlamaCppConfig{
+				BaseURL:   baseURL,
+				ModelPath: model,
+				ModelName: model,
+				MaxTokens: maxTokens,
+			})
+
 		default:
-			p = &errProvider{err: fmt.Errorf("agent.provider %q: unrecognized provider type %q (supported: mock, test, anthropic, openai, copilot)", name, providerType)}
+			p = &errProvider{err: fmt.Errorf("agent.provider %q: unrecognized provider type %q (supported: mock, test, anthropic, openai, copilot, ollama, llama_cpp)", name, providerType)}
 		}
 
 		// Parse agent seeds

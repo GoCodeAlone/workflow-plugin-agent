@@ -38,6 +38,7 @@ type ToolCall struct {
 // Response is a completed (non-streaming) provider response.
 type Response struct {
 	Content   string     `json:"content"`
+	Thinking  string     `json:"thinking,omitempty"` // reasoning trace (e.g. from <think> tags)
 	ToolCalls []ToolCall `json:"tool_calls,omitempty"`
 	Usage     Usage      `json:"usage"`
 }
@@ -50,11 +51,12 @@ type Usage struct {
 
 // StreamEvent is emitted during streaming responses.
 type StreamEvent struct {
-	Type  string    `json:"type"` // "text", "tool_call", "done", "error"
-	Text  string    `json:"text,omitempty"`
-	Tool  *ToolCall `json:"tool,omitempty"`
-	Error string    `json:"error,omitempty"`
-	Usage *Usage    `json:"usage,omitempty"`
+	Type     string    `json:"type"` // "text", "thinking", "tool_call", "done", "error"
+	Text     string    `json:"text,omitempty"`
+	Thinking string    `json:"thinking,omitempty"`
+	Tool     *ToolCall `json:"tool,omitempty"`
+	Error    string    `json:"error,omitempty"`
+	Usage    *Usage    `json:"usage,omitempty"`
 }
 
 // Provider is an AI backend that powers agent reasoning.
