@@ -147,6 +147,12 @@ func (d *DaemonClient) Run(ctx context.Context) error {
 
 	// WS reader goroutine — sole reader of the connection.
 	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				fmt.Fprintf(os.Stderr, "daemon reader panic: %v\n", r)
+			}
+			close(d.wsMsgCh)
+		}()
 		for {
 			_, data, err := conn.ReadMessage()
 			if err != nil {
@@ -158,7 +164,19 @@ func (d *DaemonClient) Run(ctx context.Context) error {
 	}()
 
 	// Dispatcher goroutine — appends to events file and fans out.
+	// Closes all subscriber channels when it exits so waiters are unblocked.
 	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				fmt.Fprintf(os.Stderr, "daemon dispatcher panic: %v\n", r)
+			}
+			d.subsMu.Lock()
+			for _, sub := range d.subs {
+				close(sub.ch)
+			}
+			d.subs = nil
+			d.subsMu.Unlock()
+		}()
 		for data := range d.wsMsgCh {
 			evw.Append(data)
 			if d.cfg.OnMessage != nil {

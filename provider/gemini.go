@@ -114,14 +114,22 @@ func (p *GeminiProvider) Stream(ctx context.Context, messages []Message, tools [
 	go func() {
 		defer close(ch)
 		defer client.Close()
+		send := func(ev StreamEvent) bool {
+			select {
+			case ch <- ev:
+				return true
+			case <-ctx.Done():
+				return false
+			}
+		}
 		for {
 			resp, err := iter.Next()
 			if err == iterator.Done {
-				ch <- StreamEvent{Type: "done"}
+				send(StreamEvent{Type: "done"})
 				return
 			}
 			if err != nil {
-				ch <- StreamEvent{Type: "error", Error: err.Error()}
+				send(StreamEvent{Type: "error", Error: err.Error()})
 				return
 			}
 			for _, cand := range resp.Candidates {
@@ -132,14 +140,18 @@ func (p *GeminiProvider) Stream(ctx context.Context, messages []Message, tools [
 					switch v := part.(type) {
 					case genai.Text:
 						if v != "" {
-							ch <- StreamEvent{Type: "text", Text: string(v)}
+							if !send(StreamEvent{Type: "text", Text: string(v)}) {
+								return
+							}
 						}
 					case genai.FunctionCall:
-						ch <- StreamEvent{Type: "tool_call", Tool: &ToolCall{
+						if !send(StreamEvent{Type: "tool_call", Tool: &ToolCall{
 							ID:        v.Name,
 							Name:      v.Name,
 							Arguments: v.Args,
-						}}
+						}}) {
+							return
+						}
 					}
 				}
 			}
