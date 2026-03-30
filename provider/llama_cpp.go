@@ -17,7 +17,7 @@ const (
 	defaultLlamaCppPort        = 8081
 	defaultLlamaCppGPULayers   = -1
 	defaultLlamaCppContextSize = 8192
-	defaultLlamaCppMaxTokens   = 4096
+	defaultLlamaCppMaxTokens   = 8192
 )
 
 // LlamaCppConfig holds configuration for the LlamaCpp provider.

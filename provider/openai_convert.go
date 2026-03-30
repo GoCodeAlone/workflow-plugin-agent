@@ -81,6 +81,16 @@ func fromOpenAIResponse(resp *openaisdk.ChatCompletion) (*Response, error) {
 	}
 	msg := resp.Choices[0].Message
 	result.Content = msg.Content
+	// For reasoning models (Qwen3.5, etc.) that put output in reasoning_content
+	// instead of content, extract it from the raw JSON extra fields.
+	if result.Content == "" {
+		if rc, ok := msg.JSON.ExtraFields["reasoning_content"]; ok && rc.Valid() {
+			var reasoning string
+			if err := json.Unmarshal([]byte(rc.Raw()), &reasoning); err == nil && reasoning != "" {
+				result.Content = reasoning
+			}
+		}
+	}
 	for _, tc := range msg.ToolCalls {
 		var args map[string]any
 		if tc.Function.Arguments != "" {
