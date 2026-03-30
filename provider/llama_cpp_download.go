@@ -15,7 +15,7 @@ import (
 )
 
 // llama.cpp pinned version — bumped when we want to track a new release.
-const llamaCppPinnedVersion = "b3447"
+const llamaCppPinnedVersion = "b8586"
 
 var (
 	llamaServerGitHubAPI   = "https://api.github.com/repos/ggerganov/llama.cpp/releases/tags/" + llamaCppPinnedVersion
