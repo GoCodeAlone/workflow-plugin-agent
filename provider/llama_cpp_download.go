@@ -1,8 +1,10 @@
 package provider
 
 import (
+	"archive/tar"
 	"archive/zip"
 	"bytes"
+	"compress/gzip"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -67,7 +69,7 @@ func EnsureLlamaServer(ctx context.Context) (string, error) {
 		return "", fmt.Errorf("llama_cpp_download: download %s: %w", downloadURL, err)
 	}
 
-	if err := extractLlamaServerFromZip(data, cachedBin, version); err != nil {
+	if err := extractLlamaServer(data, cachedBin, version, strings.HasSuffix(downloadURL, ".tar.gz")); err != nil {
 		return "", fmt.Errorf("llama_cpp_download: extract binary: %w", err)
 	}
 
@@ -128,34 +130,48 @@ func resolveLlamaServerURL(ctx context.Context) (url, version string, err error)
 }
 
 // findAssetURL returns the browser_download_url for the asset matching goos/goarch.
+// Tries tar.gz first (newer releases), then falls back to zip (older releases).
 func findAssetURL(release ghRelease, goos, goarch string) (string, error) {
-	suffix := assetNameForPlatform(release.TagName, goos, goarch)
-	for _, asset := range release.Assets {
-		if strings.HasSuffix(asset.Name, suffix) {
-			return asset.BrowserDownloadURL, nil
+	suffixes := assetSuffixesForPlatform(goos, goarch)
+	for _, suffix := range suffixes {
+		for _, asset := range release.Assets {
+			if strings.HasSuffix(asset.Name, suffix) {
+				return asset.BrowserDownloadURL, nil
+			}
 		}
 	}
-	return "", fmt.Errorf("llama_cpp_download: no asset matching suffix %q for platform %s/%s in release %s",
-		suffix, goos, goarch, release.TagName)
+	return "", fmt.Errorf("llama_cpp_download: no asset matching suffixes %v for platform %s/%s in release %s",
+		suffixes, goos, goarch, release.TagName)
 }
 
-// assetNameForPlatform returns the expected asset filename suffix for the given OS/arch.
-func assetNameForPlatform(tag, goos, goarch string) string {
-	_ = tag // retained for future version-specific naming
+// assetSuffixesForPlatform returns candidate asset suffixes in priority order.
+// Newer llama.cpp releases (b4000+) use .tar.gz, older ones use .zip.
+func assetSuffixesForPlatform(goos, goarch string) []string {
 	switch goos {
 	case "darwin":
 		if goarch == "arm64" {
-			return "-bin-macos-arm64.zip"
+			return []string{"-bin-macos-arm64.tar.gz", "-bin-macos-arm64.zip"}
 		}
-		return "-bin-macos-x64.zip"
+		return []string{"-bin-macos-x64.tar.gz", "-bin-macos-x64.zip"}
 	case "windows":
-		return "-bin-win-avx-x64.zip"
+		return []string{"-bin-win-avx-x64.zip"} // Windows likely still zip
 	default: // linux
 		if goarch == "arm64" {
-			return "-bin-linux-arm64.zip"
+			return []string{"-bin-linux-arm64.tar.gz", "-bin-linux-arm64.zip"}
 		}
-		return "-bin-linux-amd64.zip"
+		return []string{"-bin-linux-amd64.tar.gz", "-bin-linux-amd64.zip"}
 	}
+}
+
+// assetNameForPlatform returns the expected asset filename suffix for the given OS/arch.
+// Deprecated: use assetSuffixesForPlatform for multi-format support.
+func assetNameForPlatform(tag, goos, goarch string) string {
+	_ = tag
+	suffixes := assetSuffixesForPlatform(goos, goarch)
+	if len(suffixes) > 0 {
+		return suffixes[0]
+	}
+	return ""
 }
 
 // downloadBytes fetches a URL and returns the full body as bytes.
@@ -173,6 +189,52 @@ func downloadBytes(ctx context.Context, url string) ([]byte, error) {
 		return nil, fmt.Errorf("status %d", resp.StatusCode)
 	}
 	return io.ReadAll(resp.Body)
+}
+
+// extractLlamaServer extracts the llama-server binary from either tar.gz or zip data.
+func extractLlamaServer(data []byte, destPath, version string, isTarGz bool) error {
+	if isTarGz {
+		return extractLlamaServerFromTarGz(data, destPath, version)
+	}
+	return extractLlamaServerFromZip(data, destPath, version)
+}
+
+// extractLlamaServerFromTarGz finds the llama-server binary inside tar.gz data and writes it to destPath.
+func extractLlamaServerFromTarGz(data []byte, destPath, version string) error {
+	gr, err := gzip.NewReader(bytes.NewReader(data))
+	if err != nil {
+		return fmt.Errorf("open gzip: %w", err)
+	}
+	defer func() { _ = gr.Close() }()
+
+	tr := tar.NewReader(gr)
+	binName := "llama-server"
+	if runtime.GOOS == "windows" {
+		binName = "llama-server.exe"
+	}
+
+	for {
+		header, err := tr.Next()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return fmt.Errorf("read tar entry: %w", err)
+		}
+		if filepath.Base(header.Name) != binName {
+			continue
+		}
+		out, err := os.Create(destPath)
+		if err != nil {
+			return fmt.Errorf("create dest file: %w", err)
+		}
+		defer func() { _ = out.Close() }()
+		if _, err := io.Copy(out, tr); err != nil {
+			return fmt.Errorf("copy binary: %w", err)
+		}
+		return nil
+	}
+	return fmt.Errorf("llama-server binary not found in tar.gz archive (version %s)", version)
 }
 
 // extractLlamaServerFromZip finds the llama-server binary inside zipData and writes it to destPath.
