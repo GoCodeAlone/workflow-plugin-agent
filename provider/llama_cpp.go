@@ -32,7 +32,8 @@ type LlamaCppConfig struct {
 	ContextSize int    // -c flag; default 8192
 	Threads     int    // -t flag; default runtime.NumCPU()
 	Port        int    // server port; default 8081
-	MaxTokens   int    // default 4096
+	MaxTokens      int    // default 8192
+	DisableThinking bool  // send chat_template_kwargs.enable_thinking=false for reasoning models
 	HTTPClient  *http.Client
 }
 
@@ -104,7 +105,12 @@ func (p *LlamaCppProvider) Chat(ctx context.Context, messages []Message, tools [
 	}
 	params.Model = shared.ChatModel(p.modelName())
 
-	resp, err := p.client.Chat.Completions.New(ctx, params)
+	var opts []option.RequestOption
+	if p.config.DisableThinking {
+		opts = append(opts, option.WithJSONSet("chat_template_kwargs", map[string]any{"enable_thinking": false}))
+	}
+
+	resp, err := p.client.Chat.Completions.New(ctx, params, opts...)
 	if err != nil {
 		return nil, fmt.Errorf("llama_cpp: %w", err)
 	}
