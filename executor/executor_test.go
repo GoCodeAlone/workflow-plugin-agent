@@ -446,6 +446,64 @@ func TestExecute_NilCallbacksBackwardCompat(t *testing.T) {
 	}
 }
 
+// TestExecute_ToolArgsEventIsCopy verifies that mutating Event.ToolArgs in an OnEvent
+// handler does not affect the tool invocation that follows.
+func TestExecute_ToolArgsEventIsCopy(t *testing.T) {
+	callN := 0
+	p := &callCountProvider{
+		onChat: func() (*provider.Response, error) {
+			callN++
+			if callN == 1 {
+				return &provider.Response{
+					ToolCalls: []provider.ToolCall{
+						{ID: "tc-1", Name: "spy", Arguments: map[string]any{"original": "value"}},
+					},
+				}, nil
+			}
+			return &provider.Response{Content: "done"}, nil
+		},
+	}
+
+	var capturedToolArgs map[string]any
+	reg := tools.NewRegistry()
+	reg.Register(&simpleTool{
+		name: "spy",
+		def:  provider.ToolDef{Name: "spy", Description: "capture args"},
+		fn: func(_ context.Context, args map[string]any) (any, error) {
+			capturedToolArgs = args
+			return "ok", nil
+		},
+	})
+
+	cfg := Config{
+		Provider:     p,
+		ToolRegistry: reg,
+		OnEvent: func(e Event) {
+			// Mutate the event's ToolArgs — this should NOT affect tool execution.
+			if e.Type == EventToolCallStart && e.ToolArgs != nil {
+				e.ToolArgs["injected"] = "mutation"
+				delete(e.ToolArgs, "original")
+			}
+		},
+	}
+
+	_, err := Execute(context.Background(), cfg, "sys", "task", "agent-1")
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+
+	// The tool should have received the original args, not the mutated ones.
+	if capturedToolArgs == nil {
+		t.Fatal("spy tool was not executed")
+	}
+	if _, mutated := capturedToolArgs["injected"]; mutated {
+		t.Error("tool received mutated args — ToolArgs on Event was not a copy")
+	}
+	if capturedToolArgs["original"] != "value" {
+		t.Errorf("tool args 'original' key: want %q, got %v", "value", capturedToolArgs["original"])
+	}
+}
+
 // eventTypes extracts the Type from each event for diagnostic output.
 func eventTypes(events []Event) []EventType {
 	out := make([]EventType, len(events))

@@ -171,6 +171,14 @@ func Execute(ctx context.Context, cfg Config, systemPrompt, userTask, agentID st
 			Iteration: iterCount,
 		})
 
+		// Drain inbox: append any externally injected messages to the conversation
+		// BEFORE the compaction check, so compaction accounts for injected messages.
+		var inboxClosed bool
+		messages, inboxClosed = drainInbox(ctx, cfg, messages, agentID, iterCount)
+		if inboxClosed {
+			cfg.Inbox = nil // Avoid unnecessary selects on subsequent iterations.
+		}
+
 		// Context window management: compact if approaching model's token limit.
 		if cm.NeedsCompaction(messages) {
 			messages = cm.Compact(ctx, messages, cfg.Provider)
@@ -186,13 +194,6 @@ func Execute(ctx context.Context, cfg Config, systemPrompt, userTask, agentID st
 					cm.Compactions(),
 				),
 			})
-		}
-
-		// Drain inbox: append any externally injected messages to the conversation.
-		var inboxClosed bool
-		messages, inboxClosed = drainInbox(ctx, cfg, messages, agentID, iterCount)
-		if inboxClosed {
-			cfg.Inbox = nil // Avoid unnecessary selects on subsequent iterations.
 		}
 
 		// Redact secrets from messages before sending to LLM
@@ -269,14 +270,15 @@ func Execute(ctx context.Context, cfg Config, systemPrompt, userTask, agentID st
 			var resultStr string
 			var isError bool
 
-			// Emit tool call start event
+			// Emit tool call start event with a copy of the arguments to prevent
+			// any OnEvent handler from mutating the map used by the tool execution.
 			emit(cfg, Event{
 				Type:       EventToolCallStart,
 				AgentID:    agentID,
 				Iteration:  iterCount,
 				ToolName:   tc.Name,
 				ToolCallID: tc.ID,
-				ToolArgs:   tc.Arguments,
+				ToolArgs:   copyArgs(tc.Arguments),
 			})
 
 			if cfg.ToolRegistry != nil {
@@ -535,15 +537,27 @@ func emit(cfg Config, event Event) {
 	}
 }
 
+// copyArgs returns a shallow copy of the arguments map so that event handlers
+// cannot mutate the original map used by tool execution.
+func copyArgs(args map[string]any) map[string]any {
+	if args == nil {
+		return nil
+	}
+	cp := make(map[string]any, len(args))
+	for k, v := range args {
+		cp[k] = v
+	}
+	return cp
+}
+
 // drainInbox non-blockingly drains all pending messages from cfg.Inbox
-// and appends them to the conversation. If cfg.Inbox is nil, returns
-// messages unchanged. If the channel is closed, it nils out cfg.Inbox
-// to avoid unnecessary select operations on subsequent iterations.
+// and appends them to the conversation. Returns the updated message slice
+// and a boolean indicating whether the inbox channel was closed.
+// If cfg.Inbox is nil, returns messages unchanged.
 func drainInbox(ctx context.Context, cfg Config, messages []provider.Message, agentID string, iteration int) ([]provider.Message, bool) {
 	if cfg.Inbox == nil {
 		return messages, false
 	}
-	closed := false
 	for {
 		select {
 		case msg, ok := <-cfg.Inbox:
@@ -563,7 +577,7 @@ func drainInbox(ctx context.Context, cfg Config, messages []provider.Message, ag
 			})
 		default:
 			// No more pending messages.
-			return messages, closed
+			return messages, false
 		}
 	}
 }
