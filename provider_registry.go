@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/GoCodeAlone/modular"
+	gkprov "github.com/GoCodeAlone/workflow-plugin-agent/genkit"
 	"github.com/GoCodeAlone/workflow-plugin-agent/provider"
 	"github.com/GoCodeAlone/workflow/config"
 	"github.com/GoCodeAlone/workflow/module"
@@ -27,8 +28,8 @@ type LLMProviderConfig struct {
 	IsDefault  int    `json:"is_default"`
 }
 
-// ProviderFactory creates a provider.Provider from an API key and config.
-type ProviderFactory func(apiKey string, cfg LLMProviderConfig) (provider.Provider, error)
+// ProviderFactory creates a provider.Provider from a context, API key, and config.
+type ProviderFactory func(ctx context.Context, apiKey string, cfg LLMProviderConfig) (provider.Provider, error)
 
 // ProviderRegistry manages AI provider lifecycle: factory creation, caching, and DB lookup.
 type ProviderRegistry struct {
@@ -48,58 +49,34 @@ func NewProviderRegistry(db *sql.DB, secretsProvider secrets.Provider) *Provider
 		Factories: make(map[string]ProviderFactory),
 	}
 
-	r.Factories["mock"] = func(_ string, _ LLMProviderConfig) (provider.Provider, error) {
+	r.Factories["mock"] = func(_ context.Context, _ string, _ LLMProviderConfig) (provider.Provider, error) {
 		return &mockProvider{responses: []string{"I have completed the task."}}, nil
 	}
-	r.Factories["anthropic"] = func(apiKey string, cfg LLMProviderConfig) (provider.Provider, error) {
-		return provider.NewAnthropicProvider(provider.AnthropicConfig{
-			APIKey:    apiKey,
-			Model:     cfg.Model,
-			BaseURL:   cfg.BaseURL,
-			MaxTokens: cfg.MaxTokens,
-		}), nil
+	r.Factories["anthropic"] = func(ctx context.Context, apiKey string, cfg LLMProviderConfig) (provider.Provider, error) {
+		return gkprov.NewAnthropicProvider(ctx, apiKey, cfg.Model, cfg.BaseURL, cfg.MaxTokens)
 	}
-	r.Factories["openai"] = func(apiKey string, cfg LLMProviderConfig) (provider.Provider, error) {
-		return provider.NewOpenAIProvider(provider.OpenAIConfig{
-			APIKey:    apiKey,
-			Model:     cfg.Model,
-			BaseURL:   cfg.BaseURL,
-			MaxTokens: cfg.MaxTokens,
-		}), nil
+	r.Factories["openai"] = func(ctx context.Context, apiKey string, cfg LLMProviderConfig) (provider.Provider, error) {
+		return gkprov.NewOpenAIProvider(ctx, apiKey, cfg.Model, cfg.BaseURL, cfg.MaxTokens)
 	}
-	r.Factories["openrouter"] = func(apiKey string, cfg LLMProviderConfig) (provider.Provider, error) {
-		if cfg.BaseURL == "" {
-			cfg.BaseURL = "https://openrouter.ai/api/v1"
+	r.Factories["openrouter"] = func(ctx context.Context, apiKey string, cfg LLMProviderConfig) (provider.Provider, error) {
+		baseURL := cfg.BaseURL
+		if baseURL == "" {
+			baseURL = "https://openrouter.ai/api/v1"
 		}
-		return provider.NewOpenAIProvider(provider.OpenAIConfig{
-			APIKey:    apiKey,
-			Model:     cfg.Model,
-			BaseURL:   cfg.BaseURL,
-			MaxTokens: cfg.MaxTokens,
-		}), nil
+		return gkprov.NewOpenAICompatibleProvider(ctx, "openrouter", apiKey, cfg.Model, baseURL, cfg.MaxTokens)
 	}
-	r.Factories["copilot"] = func(apiKey string, cfg LLMProviderConfig) (provider.Provider, error) {
-		return provider.NewCopilotProvider(provider.CopilotConfig{
-			Token:     apiKey,
-			Model:     cfg.Model,
-			BaseURL:   cfg.BaseURL,
-			MaxTokens: cfg.MaxTokens,
-		}), nil
+	r.Factories["copilot"] = func(ctx context.Context, apiKey string, cfg LLMProviderConfig) (provider.Provider, error) {
+		baseURL := cfg.BaseURL
+		if baseURL == "" {
+			baseURL = "https://api.githubcopilot.com"
+		}
+		return gkprov.NewOpenAICompatibleProvider(ctx, "copilot", apiKey, cfg.Model, baseURL, cfg.MaxTokens)
 	}
-	r.Factories["ollama"] = func(_ string, cfg LLMProviderConfig) (provider.Provider, error) {
-		return provider.NewOllamaProvider(provider.OllamaConfig{
-			Model:     cfg.Model,
-			BaseURL:   cfg.BaseURL,
-			MaxTokens: cfg.MaxTokens,
-		}), nil
+	r.Factories["ollama"] = func(ctx context.Context, _ string, cfg LLMProviderConfig) (provider.Provider, error) {
+		return gkprov.NewOllamaProvider(ctx, cfg.Model, cfg.BaseURL, cfg.MaxTokens)
 	}
-	r.Factories["llama_cpp"] = func(_ string, cfg LLMProviderConfig) (provider.Provider, error) {
-		return provider.NewLlamaCppProvider(provider.LlamaCppConfig{
-			BaseURL:   cfg.BaseURL,
-			ModelPath: cfg.Model,
-			ModelName: cfg.Model,
-			MaxTokens: cfg.MaxTokens,
-		}), nil
+	r.Factories["llama_cpp"] = func(ctx context.Context, _ string, cfg LLMProviderConfig) (provider.Provider, error) {
+		return gkprov.NewOpenAICompatibleProvider(ctx, "llama_cpp", "", cfg.Model, cfg.BaseURL, cfg.MaxTokens)
 	}
 
 	return r
@@ -215,7 +192,7 @@ func (r *ProviderRegistry) createAndCache(ctx context.Context, alias string, cfg
 		return nil, fmt.Errorf("provider registry: unknown provider type %q", cfg.Type)
 	}
 
-	p, err := factory(apiKey, *cfg)
+	p, err := factory(ctx, apiKey, *cfg)
 	if err != nil {
 		return nil, fmt.Errorf("provider registry: create %q: %w", alias, err)
 	}

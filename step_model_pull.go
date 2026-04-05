@@ -44,13 +44,10 @@ func (s *ModelPullStep) Execute(ctx context.Context, _ *module.PipelineContext) 
 }
 
 func (s *ModelPullStep) pullOllama(ctx context.Context) (*module.StepResult, error) {
-	p := provider.NewOllamaProvider(provider.OllamaConfig{
-		Model:   s.model,
-		BaseURL: s.ollamaBase,
-	})
+	client := provider.NewOllamaClient(s.ollamaBase)
 
 	// Check if model is already available.
-	models, err := p.ListModels(ctx)
+	models, err := client.ListModels(ctx)
 	if err == nil {
 		for _, m := range models {
 			if m.ID == s.model || m.Name == s.model {
@@ -66,7 +63,7 @@ func (s *ModelPullStep) pullOllama(ctx context.Context) (*module.StepResult, err
 	}
 
 	// Pull (download) the model.
-	if pullErr := p.Pull(ctx, s.model, nil); pullErr != nil {
+	if pullErr := client.Pull(ctx, s.model, nil); pullErr != nil {
 		return &module.StepResult{
 			Output: map[string]any{
 				"status":     "error",

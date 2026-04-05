@@ -664,7 +664,7 @@ func testInteractionHook() plugin.WiringHook {
 					}
 					if regSvc, ok := app.SvcRegistry()["ratchet-provider-registry"]; ok {
 						if registry, ok := regSvc.(*ProviderRegistry); ok {
-							registry.factories["test"] = func(_ string, _ LLMProviderConfig) (provider.Provider, error) {
+							registry.factories["test"] = func(_ context.Context, _ string, _ LLMProviderConfig) (provider.Provider, error) {
 								return testProvider, nil
 							}
 							if registry.db != nil {
@@ -709,7 +709,7 @@ func testInteractionHook() plugin.WiringHook {
 				if regSvc, ok := app.SvcRegistry()["ratchet-provider-registry"]; ok {
 					if registry, ok := regSvc.(*ProviderRegistry); ok {
 						// Register a "test" factory that returns our pre-built test provider
-						registry.factories["test"] = func(_ string, _ LLMProviderConfig) (provider.Provider, error) {
+						registry.factories["test"] = func(_ context.Context, _ string, _ LLMProviderConfig) (provider.Provider, error) {
 							return testProvider, nil
 						}
 						// Update the default provider row in the DB from "mock" to "test"

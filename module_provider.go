@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/GoCodeAlone/modular"
+	gkprov "github.com/GoCodeAlone/workflow-plugin-agent/genkit"
 	"github.com/GoCodeAlone/workflow-plugin-agent/provider"
 	"github.com/GoCodeAlone/workflow/plugin"
 )
@@ -183,43 +184,42 @@ func newProviderModuleFactory() plugin.ModuleFactory {
 			}
 
 		case "anthropic":
-			p = provider.NewAnthropicProvider(provider.AnthropicConfig{
-				APIKey:    apiKey,
-				Model:     model,
-				BaseURL:   baseURL,
-				MaxTokens: maxTokens,
-			})
+			if prov, err := gkprov.NewAnthropicProvider(context.TODO() /* ModuleFactory doesn't receive ctx; TODO: thread ctx via Start() */, apiKey, model, baseURL, maxTokens); err != nil {
+				p = &errProvider{err: err}
+			} else {
+				p = prov
+			}
 
 		case "openai":
-			p = provider.NewOpenAIProvider(provider.OpenAIConfig{
-				APIKey:    apiKey,
-				Model:     model,
-				BaseURL:   baseURL,
-				MaxTokens: maxTokens,
-			})
+			if prov, err := gkprov.NewOpenAIProvider(context.TODO() /* ModuleFactory doesn't receive ctx; TODO: thread ctx via Start() */, apiKey, model, baseURL, maxTokens); err != nil {
+				p = &errProvider{err: err}
+			} else {
+				p = prov
+			}
 
 		case "copilot":
-			p = provider.NewCopilotProvider(provider.CopilotConfig{
-				Token:     apiKey,
-				Model:     model,
-				BaseURL:   baseURL,
-				MaxTokens: maxTokens,
-			})
+			if baseURL == "" {
+				baseURL = "https://api.githubcopilot.com"
+			}
+			if prov, err := gkprov.NewOpenAICompatibleProvider(context.TODO() /* ModuleFactory doesn't receive ctx; TODO: thread ctx via Start() */, "copilot", apiKey, model, baseURL, maxTokens); err != nil {
+				p = &errProvider{err: err}
+			} else {
+				p = prov
+			}
 
 		case "ollama":
-			p = provider.NewOllamaProvider(provider.OllamaConfig{
-				Model:     model,
-				BaseURL:   baseURL,
-				MaxTokens: maxTokens,
-			})
+			if prov, err := gkprov.NewOllamaProvider(context.TODO() /* ModuleFactory doesn't receive ctx; TODO: thread ctx via Start() */, model, baseURL, maxTokens); err != nil {
+				p = &errProvider{err: err}
+			} else {
+				p = prov
+			}
 
 		case "llama_cpp":
-			p = provider.NewLlamaCppProvider(provider.LlamaCppConfig{
-				BaseURL:   baseURL,
-				ModelPath: model,
-				ModelName: model,
-				MaxTokens: maxTokens,
-			})
+			if prov, err := gkprov.NewOpenAICompatibleProvider(context.TODO() /* ModuleFactory doesn't receive ctx; TODO: thread ctx via Start() */, "llama_cpp", "", model, baseURL, maxTokens); err != nil {
+				p = &errProvider{err: err}
+			} else {
+				p = prov
+			}
 
 		default:
 			p = &errProvider{err: fmt.Errorf("agent.provider %q: unrecognized provider type %q (supported: mock, test, anthropic, openai, copilot, ollama, llama_cpp)", name, providerType)}
