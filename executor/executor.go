@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log"
 	"strings"
 	"time"
 
@@ -556,7 +557,11 @@ func emit(cfg Config, event Event) {
 		return
 	}
 	func() {
-		defer func() { recover() }() //nolint:errcheck
+		defer func() {
+			if r := recover(); r != nil {
+				log.Printf("executor: OnEvent handler panicked (event=%s): %v", event.Type, r)
+			}
+		}()
 		cfg.OnEvent(event)
 	}()
 }
