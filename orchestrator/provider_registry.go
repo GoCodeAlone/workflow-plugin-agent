@@ -8,6 +8,7 @@ import (
 	"sync"
 	"time"
 
+	gkprov "github.com/GoCodeAlone/workflow-plugin-agent/genkit"
 	"github.com/GoCodeAlone/workflow-plugin-agent/provider"
 	"github.com/GoCodeAlone/workflow/secrets"
 )
@@ -243,80 +244,56 @@ func mockProviderFactory(_ string, _ LLMProviderConfig) (provider.Provider, erro
 }
 
 func anthropicProviderFactory(apiKey string, cfg LLMProviderConfig) (provider.Provider, error) {
-	return provider.NewAnthropicProvider(provider.AnthropicConfig{
-		APIKey:    apiKey,
-		Model:     cfg.Model,
-		BaseURL:   cfg.BaseURL,
-		MaxTokens: cfg.MaxTokens,
-	}), nil
+	return gkprov.NewAnthropicProvider(context.Background(), apiKey, cfg.Model, cfg.BaseURL, cfg.MaxTokens)
 }
 
 func openaiProviderFactory(apiKey string, cfg LLMProviderConfig) (provider.Provider, error) {
-	return provider.NewOpenAIProvider(provider.OpenAIConfig{
-		APIKey:    apiKey,
-		Model:     cfg.Model,
-		BaseURL:   cfg.BaseURL,
-		MaxTokens: cfg.MaxTokens,
-	}), nil
+	return gkprov.NewOpenAIProvider(context.Background(), apiKey, cfg.Model, cfg.BaseURL, cfg.MaxTokens)
 }
 
 func openrouterProviderFactory(apiKey string, cfg LLMProviderConfig) (provider.Provider, error) {
-	return provider.NewOpenRouterProvider(provider.OpenRouterConfig{
-		APIKey:    apiKey,
-		Model:     cfg.Model,
-		BaseURL:   cfg.BaseURL,
-		MaxTokens: cfg.MaxTokens,
-	}), nil
+	baseURL := cfg.BaseURL
+	if baseURL == "" {
+		baseURL = "https://openrouter.ai/api/v1"
+	}
+	return gkprov.NewOpenAICompatibleProvider(context.Background(), "openrouter", apiKey, cfg.Model, baseURL, cfg.MaxTokens)
 }
 
 func copilotProviderFactory(apiKey string, cfg LLMProviderConfig) (provider.Provider, error) {
-	return provider.NewCopilotProvider(provider.CopilotConfig{
-		Token:     apiKey,
-		Model:     cfg.Model,
-		BaseURL:   cfg.BaseURL,
-		MaxTokens: cfg.MaxTokens,
-	}), nil
+	baseURL := cfg.BaseURL
+	if baseURL == "" {
+		baseURL = "https://api.githubcopilot.com"
+	}
+	return gkprov.NewOpenAICompatibleProvider(context.Background(), "copilot", apiKey, cfg.Model, baseURL, cfg.MaxTokens)
 }
 
 func cohereProviderFactory(apiKey string, cfg LLMProviderConfig) (provider.Provider, error) {
-	return provider.NewCohereProvider(provider.CohereConfig{
-		APIKey:    apiKey,
-		Model:     cfg.Model,
-		BaseURL:   cfg.BaseURL,
-		MaxTokens: cfg.MaxTokens,
-	}), nil
+	baseURL := cfg.BaseURL
+	if baseURL == "" {
+		baseURL = "https://api.cohere.ai/v1"
+	}
+	return gkprov.NewOpenAICompatibleProvider(context.Background(), "cohere", apiKey, cfg.Model, baseURL, cfg.MaxTokens)
 }
 
 func copilotModelsProviderFactory(apiKey string, cfg LLMProviderConfig) (provider.Provider, error) {
-	return provider.NewCopilotModelsProvider(provider.CopilotModelsConfig{
-		Token:     apiKey,
-		Model:     cfg.Model,
-		BaseURL:   cfg.BaseURL,
-		MaxTokens: cfg.MaxTokens,
-	}), nil
+	baseURL := cfg.BaseURL
+	if baseURL == "" {
+		baseURL = "https://models.inference.ai.azure.com"
+	}
+	return gkprov.NewOpenAICompatibleProvider(context.Background(), "copilot_models", apiKey, cfg.Model, baseURL, cfg.MaxTokens)
 }
 
 func openaiAzureProviderFactory(apiKey string, cfg LLMProviderConfig) (provider.Provider, error) {
 	s := cfg.settings()
-	return provider.NewOpenAIAzureProvider(provider.OpenAIAzureConfig{
-		Resource:       s["resource"],
-		DeploymentName: s["deployment_name"],
-		APIVersion:     s["api_version"],
-		APIKey:         apiKey,
-		EntraToken:     s["entra_token"],
-		MaxTokens:      cfg.MaxTokens,
-	})
+	return gkprov.NewAzureOpenAIProvider(context.Background(),
+		s["resource"], s["deployment_name"], s["api_version"],
+		apiKey, s["entra_token"], cfg.MaxTokens)
 }
 
 func anthropicFoundryProviderFactory(apiKey string, cfg LLMProviderConfig) (provider.Provider, error) {
 	s := cfg.settings()
-	return provider.NewAnthropicFoundryProvider(provider.AnthropicFoundryConfig{
-		Resource:   s["resource"],
-		Model:      cfg.Model,
-		MaxTokens:  cfg.MaxTokens,
-		APIKey:     apiKey,
-		EntraToken: s["entra_token"],
-	})
+	return gkprov.NewAnthropicFoundryProvider(context.Background(),
+		s["resource"], cfg.Model, apiKey, s["entra_token"], cfg.MaxTokens)
 }
 
 func anthropicVertexProviderFactory(apiKey string, cfg LLMProviderConfig) (provider.Provider, error) {
@@ -325,49 +302,25 @@ func anthropicVertexProviderFactory(apiKey string, cfg LLMProviderConfig) (provi
 	if credJSON == "" {
 		credJSON = apiKey // fallback: secret may contain the full GCP credentials JSON
 	}
-	return provider.NewAnthropicVertexProvider(provider.AnthropicVertexConfig{
-		ProjectID:       s["project_id"],
-		Region:          s["region"],
-		Model:           cfg.Model,
-		MaxTokens:       cfg.MaxTokens,
-		CredentialsJSON: credJSON,
-	})
+	return gkprov.NewVertexAIProvider(context.Background(),
+		s["project_id"], s["region"], cfg.Model, credJSON, cfg.MaxTokens)
 }
 
 func geminiProviderFactory(apiKey string, cfg LLMProviderConfig) (provider.Provider, error) {
-	return provider.NewGeminiProvider(provider.GeminiConfig{
-		APIKey:    apiKey,
-		Model:     cfg.Model,
-		MaxTokens: cfg.MaxTokens,
-	})
+	return gkprov.NewGoogleAIProvider(context.Background(), apiKey, cfg.Model, cfg.MaxTokens)
 }
 
 func ollamaProviderFactory(_ string, cfg LLMProviderConfig) (provider.Provider, error) {
-	return provider.NewOllamaProvider(provider.OllamaConfig{
-		Model:     cfg.Model,
-		BaseURL:   cfg.BaseURL,
-		MaxTokens: cfg.MaxTokens,
-	}), nil
+	return gkprov.NewOllamaProvider(context.Background(), cfg.Model, cfg.BaseURL, cfg.MaxTokens)
 }
 
 func llamaCppProviderFactory(_ string, cfg LLMProviderConfig) (provider.Provider, error) {
-	return provider.NewLlamaCppProvider(provider.LlamaCppConfig{
-		BaseURL:   cfg.BaseURL,
-		ModelPath: cfg.Model,
-		ModelName: cfg.Model,
-		MaxTokens: cfg.MaxTokens,
-	}), nil
+	// llama.cpp serves an OpenAI-compatible API
+	return gkprov.NewOpenAICompatibleProvider(context.Background(), "llama_cpp", "", cfg.Model, cfg.BaseURL, cfg.MaxTokens)
 }
 
 func anthropicBedrockProviderFactory(apiKey string, cfg LLMProviderConfig) (provider.Provider, error) {
 	s := cfg.settings()
-	return provider.NewAnthropicBedrockProvider(provider.AnthropicBedrockConfig{
-		Region:         s["region"],
-		Model:          cfg.Model,
-		MaxTokens:      cfg.MaxTokens,
-		AccessKeyID:    s["access_key_id"],
-		SecretAccessKey: apiKey,
-		SessionToken:   s["session_token"],
-		BaseURL:        cfg.BaseURL,
-	})
+	return gkprov.NewBedrockProvider(context.Background(),
+		s["region"], cfg.Model, s["access_key_id"], apiKey, s["session_token"], cfg.BaseURL, cfg.MaxTokens)
 }
