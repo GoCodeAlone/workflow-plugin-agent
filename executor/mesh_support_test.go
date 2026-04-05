@@ -21,7 +21,7 @@ func TestMeshSupport_EndToEnd(t *testing.T) {
 	var mu sync.Mutex
 	var events []Event
 
-	// Track which iteration we're on for ShouldStop.
+	// Track the number of tool calls for ShouldStop.
 	var toolCallCount int
 	var toolCallMu sync.Mutex
 

@@ -189,7 +189,11 @@ func Execute(ctx context.Context, cfg Config, systemPrompt, userTask, agentID st
 		}
 
 		// Drain inbox: append any externally injected messages to the conversation.
-		messages = drainInbox(ctx, cfg, messages, agentID, iterCount)
+		var inboxClosed bool
+		messages, inboxClosed = drainInbox(ctx, cfg, messages, agentID, iterCount)
+		if inboxClosed {
+			cfg.Inbox = nil // Avoid unnecessary selects on subsequent iterations.
+		}
 
 		// Redact secrets from messages before sending to LLM
 		for i := range messages {
@@ -533,17 +537,19 @@ func emit(cfg Config, event Event) {
 
 // drainInbox non-blockingly drains all pending messages from cfg.Inbox
 // and appends them to the conversation. If cfg.Inbox is nil, returns
-// messages unchanged.
-func drainInbox(ctx context.Context, cfg Config, messages []provider.Message, agentID string, iteration int) []provider.Message {
+// messages unchanged. If the channel is closed, it nils out cfg.Inbox
+// to avoid unnecessary select operations on subsequent iterations.
+func drainInbox(ctx context.Context, cfg Config, messages []provider.Message, agentID string, iteration int) ([]provider.Message, bool) {
 	if cfg.Inbox == nil {
-		return messages
+		return messages, false
 	}
+	closed := false
 	for {
 		select {
 		case msg, ok := <-cfg.Inbox:
 			if !ok {
 				// Channel closed — stop draining.
-				return messages
+				return messages, true
 			}
 			messages = append(messages, msg)
 			_ = cfg.Transcript.Record(ctx, TranscriptEntry{
@@ -557,7 +563,7 @@ func drainInbox(ctx context.Context, cfg Config, messages []provider.Message, ag
 			})
 		default:
 			// No more pending messages.
-			return messages
+			return messages, closed
 		}
 	}
 }
