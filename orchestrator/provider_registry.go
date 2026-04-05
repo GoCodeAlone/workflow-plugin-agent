@@ -229,8 +229,12 @@ func (r *ProviderRegistry) createAndCache(ctx context.Context, alias string, cfg
 		return nil, fmt.Errorf("provider registry: create %q: %w", alias, err)
 	}
 
-	// Cache
+	// Cache — re-check under write lock to avoid TOCTOU race
 	r.mu.Lock()
+	if existing, ok := r.cache[alias]; ok {
+		r.mu.Unlock()
+		return existing, nil
+	}
 	r.cache[alias] = p
 	r.mu.Unlock()
 

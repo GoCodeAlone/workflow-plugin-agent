@@ -3,6 +3,7 @@ package genkit
 import (
 	"context"
 	"fmt"
+	"os"
 
 	"github.com/GoCodeAlone/workflow-plugin-agent/provider"
 	gk "github.com/firebase/genkit/go/genkit"
@@ -210,6 +211,24 @@ func NewVertexAIProvider(ctx context.Context, projectID, region, model, credenti
 	if region == "" {
 		region = "us-central1"
 	}
+
+	// Genkit's VertexAI plugin uses credentials.DetectDefault() which reads
+	// GOOGLE_APPLICATION_CREDENTIALS. When inline JSON is provided, write it
+	// to a temp file and point the env var at it.
+	if credentialsJSON != "" {
+		f, err := os.CreateTemp("", "vertexai-creds-*.json")
+		if err != nil {
+			return nil, fmt.Errorf("vertexai: create temp credentials file: %w", err)
+		}
+		if _, err := f.WriteString(credentialsJSON); err != nil {
+			_ = f.Close()
+			_ = os.Remove(f.Name())
+			return nil, fmt.Errorf("vertexai: write credentials: %w", err)
+		}
+		_ = f.Close()
+		os.Setenv("GOOGLE_APPLICATION_CREDENTIALS", f.Name()) //nolint:errcheck
+	}
+
 	p := &googlegenai.VertexAI{
 		ProjectID: projectID,
 		Location:  region,
