@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"sync"
 
 	"github.com/GoCodeAlone/workflow-plugin-agent/provider"
 	gk "github.com/firebase/genkit/go/genkit"
@@ -15,6 +16,18 @@ import (
 	"github.com/openai/openai-go/option"
 )
 
+// Default models per provider when none specified.
+const (
+	defaultAnthropicModel = "claude-sonnet-4-6"
+	defaultOpenAIModel    = "gpt-4o"
+	defaultGeminiModel    = "gemini-2.5-flash"
+	defaultOllamaModel    = "qwen3:8b"
+)
+
+// vertexCredsMu guards the GOOGLE_APPLICATION_CREDENTIALS env var
+// to prevent races when multiple VertexAI providers initialize concurrently.
+var vertexCredsMu sync.Mutex
+
 
 // initGenkitWithPlugin creates a Genkit instance with a single plugin registered.
 func initGenkitWithPlugin(ctx context.Context, plugin gk.GenkitOption) *gk.Genkit {
@@ -25,6 +38,9 @@ func initGenkitWithPlugin(ctx context.Context, plugin gk.GenkitOption) *gk.Genki
 func NewAnthropicProvider(ctx context.Context, apiKey, model, baseURL string, maxTokens int) (provider.Provider, error) {
 	if apiKey == "" {
 		return nil, fmt.Errorf("anthropic: APIKey is required")
+	}
+	if model == "" {
+		model = defaultAnthropicModel
 	}
 	p := &anthropicPlugin.Anthropic{APIKey: apiKey, BaseURL: baseURL}
 	g := initGenkitWithPlugin(ctx, gk.WithPlugins(p))
@@ -45,6 +61,9 @@ func NewAnthropicProvider(ctx context.Context, apiKey, model, baseURL string, ma
 func NewOpenAIProvider(ctx context.Context, apiKey, model, baseURL string, maxTokens int) (provider.Provider, error) {
 	if apiKey == "" {
 		return nil, fmt.Errorf("openai: APIKey is required")
+	}
+	if model == "" {
+		model = defaultOpenAIModel
 	}
 	var extraOpts []option.RequestOption
 	if baseURL != "" {
@@ -70,6 +89,9 @@ func NewGoogleAIProvider(ctx context.Context, apiKey, model string, maxTokens in
 	if apiKey == "" {
 		return nil, fmt.Errorf("googleai: APIKey is required")
 	}
+	if model == "" {
+		model = defaultGeminiModel
+	}
 	p := &googlegenai.GoogleAI{APIKey: apiKey}
 	g := initGenkitWithPlugin(ctx, gk.WithPlugins(p))
 	return &genkitProvider{
@@ -89,6 +111,9 @@ func NewGoogleAIProvider(ctx context.Context, apiKey, model string, maxTokens in
 func NewOllamaProvider(ctx context.Context, model, serverAddress string, maxTokens int) (provider.Provider, error) {
 	if serverAddress == "" {
 		serverAddress = "http://localhost:11434"
+	}
+	if model == "" {
+		model = defaultOllamaModel
 	}
 	p := &ollamaPlugin.Ollama{ServerAddress: serverAddress}
 	g := initGenkitWithPlugin(ctx, gk.WithPlugins(p))
@@ -214,19 +239,35 @@ func NewVertexAIProvider(ctx context.Context, projectID, region, model, credenti
 
 	// Genkit's VertexAI plugin uses credentials.DetectDefault() which reads
 	// GOOGLE_APPLICATION_CREDENTIALS. When inline JSON is provided, write it
-	// to a temp file and point the env var at it.
+	// to a temp file, set the env var, init Genkit, then clean up.
+	var tempCredFile string
 	if credentialsJSON != "" {
+		vertexCredsMu.Lock()
+		defer vertexCredsMu.Unlock()
+
+		prevCreds := os.Getenv("GOOGLE_APPLICATION_CREDENTIALS")
+
 		f, err := os.CreateTemp("", "vertexai-creds-*.json")
 		if err != nil {
 			return nil, fmt.Errorf("vertexai: create temp credentials file: %w", err)
 		}
+		tempCredFile = f.Name()
 		if _, err := f.WriteString(credentialsJSON); err != nil {
 			_ = f.Close()
-			_ = os.Remove(f.Name())
+			_ = os.Remove(tempCredFile)
 			return nil, fmt.Errorf("vertexai: write credentials: %w", err)
 		}
 		_ = f.Close()
-		os.Setenv("GOOGLE_APPLICATION_CREDENTIALS", f.Name()) //nolint:errcheck
+		_ = os.Setenv("GOOGLE_APPLICATION_CREDENTIALS", tempCredFile)
+		defer func() {
+			// Restore previous env var and remove temp file.
+			if prevCreds == "" {
+				_ = os.Unsetenv("GOOGLE_APPLICATION_CREDENTIALS")
+			} else {
+				_ = os.Setenv("GOOGLE_APPLICATION_CREDENTIALS", prevCreds)
+			}
+			_ = os.Remove(tempCredFile)
+		}()
 	}
 
 	p := &googlegenai.VertexAI{

@@ -41,11 +41,15 @@ func (p *genkitProvider) resolveToolRefs(tools []provider.ToolDef) []ai.ToolRef 
 	refs := make([]ai.ToolRef, 0, len(tools))
 	for _, t := range tools {
 		if !p.definedTools[t.Name] {
+			// Pass the exact JSON Schema from provider.ToolDef.Parameters
+			// so the LLM gets accurate parameter definitions for tool calling.
+			// WithInputSchema requires In=any (not map[string]any).
 			tool := gk.DefineTool(p.g, t.Name, t.Description,
-				func(ctx *ai.ToolContext, input map[string]any) (map[string]any, error) {
+				func(ctx *ai.ToolContext, input any) (any, error) {
 					// Tools are executed by the executor, not Genkit.
 					return nil, fmt.Errorf("tool %s should not be called via Genkit", t.Name)
 				},
+				ai.WithInputSchema(t.Parameters),
 			)
 			refs = append(refs, tool)
 			p.definedTools[t.Name] = true

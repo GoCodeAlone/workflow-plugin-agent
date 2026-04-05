@@ -3,8 +3,6 @@ package genkit
 import (
 	"context"
 	"testing"
-
-	"github.com/GoCodeAlone/workflow-plugin-agent/provider"
 )
 
 func TestNewAnthropicProvider_MissingKey(t *testing.T) {
@@ -88,5 +86,5 @@ func TestProviderImplementsInterface(t *testing.T) {
 	if err != nil {
 		t.Skip("factory failed, skipping interface check")
 	}
-	var _ provider.Provider = p
+	_ = p // already provider.Provider; compile verifies interface
 }

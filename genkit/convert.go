@@ -3,6 +3,7 @@ package genkit
 import (
 	"github.com/GoCodeAlone/workflow-plugin-agent/provider"
 	"github.com/firebase/genkit/go/ai"
+	"github.com/google/uuid"
 )
 
 // toGenkitMessages converts our messages to Genkit messages.
@@ -73,7 +74,7 @@ func fromGenkitResponse(resp *ai.ModelResponse) *provider.Response {
 		for _, part := range msg.Content {
 			if part.ToolRequest != nil {
 				tc := provider.ToolCall{
-					ID:        part.ToolRequest.Name,
+					ID:        uuid.New().String(),
 					Name:      part.ToolRequest.Name,
 					Arguments: make(map[string]any),
 				}
@@ -121,7 +122,7 @@ func fromGenkitChunk(chunk *ai.ModelResponseChunk) provider.StreamEvent {
 			return provider.StreamEvent{
 				Type: "tool_call",
 				Tool: &provider.ToolCall{
-					ID:        part.ToolRequest.Name,
+					ID:        uuid.New().String(),
 					Name:      part.ToolRequest.Name,
 					Arguments: func() map[string]any {
 						if m, ok := part.ToolRequest.Input.(map[string]any); ok {

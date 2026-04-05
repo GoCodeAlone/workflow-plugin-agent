@@ -184,14 +184,14 @@ func newProviderModuleFactory() plugin.ModuleFactory {
 			}
 
 		case "anthropic":
-			if prov, err := gkprov.NewAnthropicProvider(context.Background(), apiKey, model, baseURL, maxTokens); err != nil {
+			if prov, err := gkprov.NewAnthropicProvider(context.TODO() /* ModuleFactory doesn't receive ctx; TODO: thread ctx via Start() */, apiKey, model, baseURL, maxTokens); err != nil {
 				p = &errProvider{err: err}
 			} else {
 				p = prov
 			}
 
 		case "openai":
-			if prov, err := gkprov.NewOpenAIProvider(context.Background(), apiKey, model, baseURL, maxTokens); err != nil {
+			if prov, err := gkprov.NewOpenAIProvider(context.TODO() /* ModuleFactory doesn't receive ctx; TODO: thread ctx via Start() */, apiKey, model, baseURL, maxTokens); err != nil {
 				p = &errProvider{err: err}
 			} else {
 				p = prov
@@ -201,21 +201,21 @@ func newProviderModuleFactory() plugin.ModuleFactory {
 			if baseURL == "" {
 				baseURL = "https://api.githubcopilot.com"
 			}
-			if prov, err := gkprov.NewOpenAICompatibleProvider(context.Background(), "copilot", apiKey, model, baseURL, maxTokens); err != nil {
+			if prov, err := gkprov.NewOpenAICompatibleProvider(context.TODO() /* ModuleFactory doesn't receive ctx; TODO: thread ctx via Start() */, "copilot", apiKey, model, baseURL, maxTokens); err != nil {
 				p = &errProvider{err: err}
 			} else {
 				p = prov
 			}
 
 		case "ollama":
-			if prov, err := gkprov.NewOllamaProvider(context.Background(), model, baseURL, maxTokens); err != nil {
+			if prov, err := gkprov.NewOllamaProvider(context.TODO() /* ModuleFactory doesn't receive ctx; TODO: thread ctx via Start() */, model, baseURL, maxTokens); err != nil {
 				p = &errProvider{err: err}
 			} else {
 				p = prov
 			}
 
 		case "llama_cpp":
-			if prov, err := gkprov.NewOpenAICompatibleProvider(context.Background(), "llama_cpp", "", model, baseURL, maxTokens); err != nil {
+			if prov, err := gkprov.NewOpenAICompatibleProvider(context.TODO() /* ModuleFactory doesn't receive ctx; TODO: thread ctx via Start() */, "llama_cpp", "", model, baseURL, maxTokens); err != nil {
 				p = &errProvider{err: err}
 			} else {
 				p = prov

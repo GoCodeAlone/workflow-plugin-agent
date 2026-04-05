@@ -35,8 +35,10 @@ func (c *LLMProviderConfig) settings() map[string]string {
 	return m
 }
 
-// ProviderFactory creates a provider.Provider from an API key and config.
-type ProviderFactory func(apiKey string, cfg LLMProviderConfig) (provider.Provider, error)
+// ProviderFactory creates a provider.Provider from a context, API key, and config.
+// The context is propagated from the caller (e.g., GetByAlias/GetDefault) to allow
+// cancellation and timeout during provider initialization.
+type ProviderFactory func(ctx context.Context, apiKey string, cfg LLMProviderConfig) (provider.Provider, error)
 
 // ProviderRegistry manages AI provider lifecycle: factory creation, caching, and DB lookup.
 type ProviderRegistry struct {
@@ -224,7 +226,7 @@ func (r *ProviderRegistry) createAndCache(ctx context.Context, alias string, cfg
 	}
 
 	// Create provider
-	p, err := factory(apiKey, *cfg)
+	p, err := factory(ctx, apiKey, *cfg)
 	if err != nil {
 		return nil, fmt.Errorf("provider registry: create %q: %w", alias, err)
 	}
@@ -243,88 +245,88 @@ func (r *ProviderRegistry) createAndCache(ctx context.Context, alias string, cfg
 
 // Built-in factory functions
 
-func mockProviderFactory(_ string, _ LLMProviderConfig) (provider.Provider, error) {
+func mockProviderFactory(_ context.Context, _ string, _ LLMProviderConfig) (provider.Provider, error) {
 	return &mockProvider{responses: []string{"I have completed the task."}}, nil
 }
 
-func anthropicProviderFactory(apiKey string, cfg LLMProviderConfig) (provider.Provider, error) {
-	return gkprov.NewAnthropicProvider(context.Background(), apiKey, cfg.Model, cfg.BaseURL, cfg.MaxTokens)
+func anthropicProviderFactory(ctx context.Context, apiKey string, cfg LLMProviderConfig) (provider.Provider, error) {
+	return gkprov.NewAnthropicProvider(ctx, apiKey, cfg.Model, cfg.BaseURL, cfg.MaxTokens)
 }
 
-func openaiProviderFactory(apiKey string, cfg LLMProviderConfig) (provider.Provider, error) {
-	return gkprov.NewOpenAIProvider(context.Background(), apiKey, cfg.Model, cfg.BaseURL, cfg.MaxTokens)
+func openaiProviderFactory(ctx context.Context, apiKey string, cfg LLMProviderConfig) (provider.Provider, error) {
+	return gkprov.NewOpenAIProvider(ctx, apiKey, cfg.Model, cfg.BaseURL, cfg.MaxTokens)
 }
 
-func openrouterProviderFactory(apiKey string, cfg LLMProviderConfig) (provider.Provider, error) {
+func openrouterProviderFactory(ctx context.Context, apiKey string, cfg LLMProviderConfig) (provider.Provider, error) {
 	baseURL := cfg.BaseURL
 	if baseURL == "" {
 		baseURL = "https://openrouter.ai/api/v1"
 	}
-	return gkprov.NewOpenAICompatibleProvider(context.Background(), "openrouter", apiKey, cfg.Model, baseURL, cfg.MaxTokens)
+	return gkprov.NewOpenAICompatibleProvider(ctx, "openrouter", apiKey, cfg.Model, baseURL, cfg.MaxTokens)
 }
 
-func copilotProviderFactory(apiKey string, cfg LLMProviderConfig) (provider.Provider, error) {
+func copilotProviderFactory(ctx context.Context, apiKey string, cfg LLMProviderConfig) (provider.Provider, error) {
 	baseURL := cfg.BaseURL
 	if baseURL == "" {
 		baseURL = "https://api.githubcopilot.com"
 	}
-	return gkprov.NewOpenAICompatibleProvider(context.Background(), "copilot", apiKey, cfg.Model, baseURL, cfg.MaxTokens)
+	return gkprov.NewOpenAICompatibleProvider(ctx, "copilot", apiKey, cfg.Model, baseURL, cfg.MaxTokens)
 }
 
-func cohereProviderFactory(apiKey string, cfg LLMProviderConfig) (provider.Provider, error) {
+func cohereProviderFactory(ctx context.Context, apiKey string, cfg LLMProviderConfig) (provider.Provider, error) {
 	baseURL := cfg.BaseURL
 	if baseURL == "" {
 		baseURL = "https://api.cohere.ai/v1"
 	}
-	return gkprov.NewOpenAICompatibleProvider(context.Background(), "cohere", apiKey, cfg.Model, baseURL, cfg.MaxTokens)
+	return gkprov.NewOpenAICompatibleProvider(ctx, "cohere", apiKey, cfg.Model, baseURL, cfg.MaxTokens)
 }
 
-func copilotModelsProviderFactory(apiKey string, cfg LLMProviderConfig) (provider.Provider, error) {
+func copilotModelsProviderFactory(ctx context.Context, apiKey string, cfg LLMProviderConfig) (provider.Provider, error) {
 	baseURL := cfg.BaseURL
 	if baseURL == "" {
 		baseURL = "https://models.inference.ai.azure.com"
 	}
-	return gkprov.NewOpenAICompatibleProvider(context.Background(), "copilot_models", apiKey, cfg.Model, baseURL, cfg.MaxTokens)
+	return gkprov.NewOpenAICompatibleProvider(ctx, "copilot_models", apiKey, cfg.Model, baseURL, cfg.MaxTokens)
 }
 
-func openaiAzureProviderFactory(apiKey string, cfg LLMProviderConfig) (provider.Provider, error) {
+func openaiAzureProviderFactory(ctx context.Context, apiKey string, cfg LLMProviderConfig) (provider.Provider, error) {
 	s := cfg.settings()
-	return gkprov.NewAzureOpenAIProvider(context.Background(),
+	return gkprov.NewAzureOpenAIProvider(ctx,
 		s["resource"], s["deployment_name"], s["api_version"],
 		apiKey, s["entra_token"], cfg.MaxTokens)
 }
 
-func anthropicFoundryProviderFactory(apiKey string, cfg LLMProviderConfig) (provider.Provider, error) {
+func anthropicFoundryProviderFactory(ctx context.Context, apiKey string, cfg LLMProviderConfig) (provider.Provider, error) {
 	s := cfg.settings()
-	return gkprov.NewAnthropicFoundryProvider(context.Background(),
+	return gkprov.NewAnthropicFoundryProvider(ctx,
 		s["resource"], cfg.Model, apiKey, s["entra_token"], cfg.MaxTokens)
 }
 
-func anthropicVertexProviderFactory(apiKey string, cfg LLMProviderConfig) (provider.Provider, error) {
+func anthropicVertexProviderFactory(ctx context.Context, apiKey string, cfg LLMProviderConfig) (provider.Provider, error) {
 	s := cfg.settings()
 	credJSON := s["credentials_json"]
 	if credJSON == "" {
 		credJSON = apiKey // fallback: secret may contain the full GCP credentials JSON
 	}
-	return gkprov.NewVertexAIProvider(context.Background(),
+	return gkprov.NewVertexAIProvider(ctx,
 		s["project_id"], s["region"], cfg.Model, credJSON, cfg.MaxTokens)
 }
 
-func geminiProviderFactory(apiKey string, cfg LLMProviderConfig) (provider.Provider, error) {
-	return gkprov.NewGoogleAIProvider(context.Background(), apiKey, cfg.Model, cfg.MaxTokens)
+func geminiProviderFactory(ctx context.Context, apiKey string, cfg LLMProviderConfig) (provider.Provider, error) {
+	return gkprov.NewGoogleAIProvider(ctx, apiKey, cfg.Model, cfg.MaxTokens)
 }
 
-func ollamaProviderFactory(_ string, cfg LLMProviderConfig) (provider.Provider, error) {
-	return gkprov.NewOllamaProvider(context.Background(), cfg.Model, cfg.BaseURL, cfg.MaxTokens)
+func ollamaProviderFactory(ctx context.Context, _ string, cfg LLMProviderConfig) (provider.Provider, error) {
+	return gkprov.NewOllamaProvider(ctx, cfg.Model, cfg.BaseURL, cfg.MaxTokens)
 }
 
-func llamaCppProviderFactory(_ string, cfg LLMProviderConfig) (provider.Provider, error) {
+func llamaCppProviderFactory(ctx context.Context, _ string, cfg LLMProviderConfig) (provider.Provider, error) {
 	// llama.cpp serves an OpenAI-compatible API
-	return gkprov.NewOpenAICompatibleProvider(context.Background(), "llama_cpp", "", cfg.Model, cfg.BaseURL, cfg.MaxTokens)
+	return gkprov.NewOpenAICompatibleProvider(ctx, "llama_cpp", "", cfg.Model, cfg.BaseURL, cfg.MaxTokens)
 }
 
-func anthropicBedrockProviderFactory(apiKey string, cfg LLMProviderConfig) (provider.Provider, error) {
+func anthropicBedrockProviderFactory(ctx context.Context, apiKey string, cfg LLMProviderConfig) (provider.Provider, error) {
 	s := cfg.settings()
-	return gkprov.NewBedrockProvider(context.Background(),
+	return gkprov.NewBedrockProvider(ctx,
 		s["region"], cfg.Model, s["access_key_id"], apiKey, s["session_token"], cfg.BaseURL, cfg.MaxTokens)
 }
