@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/GoCodeAlone/modular"
+	gkprov "github.com/GoCodeAlone/workflow-plugin-agent/genkit"
 	"github.com/GoCodeAlone/workflow-plugin-agent/provider"
 	"github.com/GoCodeAlone/workflow/config"
 	"github.com/GoCodeAlone/workflow/module"
@@ -52,54 +53,30 @@ func NewProviderRegistry(db *sql.DB, secretsProvider secrets.Provider) *Provider
 		return &mockProvider{responses: []string{"I have completed the task."}}, nil
 	}
 	r.Factories["anthropic"] = func(apiKey string, cfg LLMProviderConfig) (provider.Provider, error) {
-		return provider.NewAnthropicProvider(provider.AnthropicConfig{
-			APIKey:    apiKey,
-			Model:     cfg.Model,
-			BaseURL:   cfg.BaseURL,
-			MaxTokens: cfg.MaxTokens,
-		}), nil
+		return gkprov.NewAnthropicProvider(context.Background(), apiKey, cfg.Model, cfg.BaseURL, cfg.MaxTokens)
 	}
 	r.Factories["openai"] = func(apiKey string, cfg LLMProviderConfig) (provider.Provider, error) {
-		return provider.NewOpenAIProvider(provider.OpenAIConfig{
-			APIKey:    apiKey,
-			Model:     cfg.Model,
-			BaseURL:   cfg.BaseURL,
-			MaxTokens: cfg.MaxTokens,
-		}), nil
+		return gkprov.NewOpenAIProvider(context.Background(), apiKey, cfg.Model, cfg.BaseURL, cfg.MaxTokens)
 	}
 	r.Factories["openrouter"] = func(apiKey string, cfg LLMProviderConfig) (provider.Provider, error) {
-		if cfg.BaseURL == "" {
-			cfg.BaseURL = "https://openrouter.ai/api/v1"
+		baseURL := cfg.BaseURL
+		if baseURL == "" {
+			baseURL = "https://openrouter.ai/api/v1"
 		}
-		return provider.NewOpenAIProvider(provider.OpenAIConfig{
-			APIKey:    apiKey,
-			Model:     cfg.Model,
-			BaseURL:   cfg.BaseURL,
-			MaxTokens: cfg.MaxTokens,
-		}), nil
+		return gkprov.NewOpenAICompatibleProvider(context.Background(), "openrouter", apiKey, cfg.Model, baseURL, cfg.MaxTokens)
 	}
 	r.Factories["copilot"] = func(apiKey string, cfg LLMProviderConfig) (provider.Provider, error) {
-		return provider.NewCopilotProvider(provider.CopilotConfig{
-			Token:     apiKey,
-			Model:     cfg.Model,
-			BaseURL:   cfg.BaseURL,
-			MaxTokens: cfg.MaxTokens,
-		}), nil
+		baseURL := cfg.BaseURL
+		if baseURL == "" {
+			baseURL = "https://api.githubcopilot.com"
+		}
+		return gkprov.NewOpenAICompatibleProvider(context.Background(), "copilot", apiKey, cfg.Model, baseURL, cfg.MaxTokens)
 	}
 	r.Factories["ollama"] = func(_ string, cfg LLMProviderConfig) (provider.Provider, error) {
-		return provider.NewOllamaProvider(provider.OllamaConfig{
-			Model:     cfg.Model,
-			BaseURL:   cfg.BaseURL,
-			MaxTokens: cfg.MaxTokens,
-		}), nil
+		return gkprov.NewOllamaProvider(context.Background(), cfg.Model, cfg.BaseURL, cfg.MaxTokens)
 	}
 	r.Factories["llama_cpp"] = func(_ string, cfg LLMProviderConfig) (provider.Provider, error) {
-		return provider.NewLlamaCppProvider(provider.LlamaCppConfig{
-			BaseURL:   cfg.BaseURL,
-			ModelPath: cfg.Model,
-			ModelName: cfg.Model,
-			MaxTokens: cfg.MaxTokens,
-		}), nil
+		return gkprov.NewOpenAICompatibleProvider(context.Background(), "llama_cpp", "", cfg.Model, cfg.BaseURL, cfg.MaxTokens)
 	}
 
 	return r
