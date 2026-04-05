@@ -38,11 +38,11 @@ func TestAssetNameForPlatform_AllPlatforms(t *testing.T) {
 		goarch string
 		want   string
 	}{
-		{"darwin", "arm64", "-bin-macos-arm64.zip"},
-		{"darwin", "amd64", "-bin-macos-x64.zip"},
+		{"darwin", "arm64", "-bin-macos-arm64.tar.gz"},
+		{"darwin", "amd64", "-bin-macos-x64.tar.gz"},
 		{"windows", "amd64", "-bin-win-avx-x64.zip"},
-		{"linux", "amd64", "-bin-linux-amd64.zip"},
-		{"linux", "arm64", "-bin-linux-arm64.zip"},
+		{"linux", "amd64", "-bin-linux-amd64.tar.gz"},
+		{"linux", "arm64", "-bin-linux-arm64.tar.gz"},
 	}
 	for _, tc := range cases {
 		got := assetNameForPlatform("b3447", tc.goos, tc.goarch)
