@@ -1,6 +1,8 @@
 package genkit
 
 import (
+	"encoding/json"
+
 	"github.com/GoCodeAlone/workflow-plugin-agent/provider"
 	"github.com/firebase/genkit/go/ai"
 	"github.com/google/uuid"
@@ -26,17 +28,34 @@ func toGenkitMessages(msgs []provider.Message) []*ai.Message {
 
 		var parts []*ai.Part
 
-		// Tool call results: add as ToolResponsePart
+		// Tool call results: add as ToolResponsePart.
+		// Try to JSON-decode the content to avoid double-wrapping structured results.
 		if m.ToolCallID != "" {
+			var output any
+			if err := json.Unmarshal([]byte(m.Content), &output); err != nil {
+				// Not valid JSON — wrap as string.
+				output = map[string]any{"result": m.Content}
+			}
 			parts = []*ai.Part{ai.NewToolResponsePart(&ai.ToolResponse{
 				Name:   m.ToolCallID,
-				Output: map[string]any{"result": m.Content},
+				Output: output,
 			})}
 		} else if len(m.ToolCalls) > 0 {
-			// Assistant message with tool calls
+			// Assistant message with tool calls.
+			// Preserve text content alongside tool requests (the executor records
+			// assistant text + tool calls together).
+			if m.Content != "" {
+				parts = append(parts, ai.NewTextPart(m.Content))
+			}
 			for _, tc := range m.ToolCalls {
+				// Use tc.ID as the ToolRequest name so tool responses can be
+				// correlated back to the correct request.
+				reqName := tc.Name
+				if tc.ID != "" {
+					reqName = tc.ID
+				}
 				parts = append(parts, ai.NewToolRequestPart(&ai.ToolRequest{
-					Name:  tc.Name,
+					Name:  reqName,
 					Input: tc.Arguments,
 				}))
 			}
@@ -116,24 +135,10 @@ func fromGenkitChunk(chunk *ai.ModelResponseChunk) provider.StreamEvent {
 		return provider.StreamEvent{Type: "text", Text: text}
 	}
 
-	// Check for tool calls in chunk
-	for _, part := range chunk.Content {
-		if part.ToolRequest != nil {
-			return provider.StreamEvent{
-				Type: "tool_call",
-				Tool: &provider.ToolCall{
-					ID:        uuid.New().String(),
-					Name:      part.ToolRequest.Name,
-					Arguments: func() map[string]any {
-						if m, ok := part.ToolRequest.Input.(map[string]any); ok {
-							return m
-						}
-						return nil
-					}(),
-				},
-			}
-		}
-	}
+	// Note: tool_call events from chunks are NOT emitted here because Genkit
+	// provides the complete tool call list in the final Done response. Emitting
+	// from both chunks and Done would produce duplicate events with unstable IDs.
+	// The adapter's Stream() method emits tool_call events from the final response only.
 
 	return provider.StreamEvent{Type: "text", Text: ""}
 }

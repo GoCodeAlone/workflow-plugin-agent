@@ -11,6 +11,7 @@ import (
 	gkprov "github.com/GoCodeAlone/workflow-plugin-agent/genkit"
 	"github.com/GoCodeAlone/workflow-plugin-agent/provider"
 	"github.com/GoCodeAlone/workflow/secrets"
+	"golang.org/x/sync/singleflight"
 )
 
 // LLMProviderConfig represents a configured LLM provider stored in the database.
@@ -47,6 +48,7 @@ type ProviderRegistry struct {
 	secrets   secrets.Provider
 	cache     map[string]provider.Provider
 	factories map[string]ProviderFactory
+	sflight   singleflight.Group // deduplicates concurrent cold-start creation per alias
 }
 
 // NewProviderRegistry creates a new ProviderRegistry with built-in factories registered.
@@ -208,39 +210,51 @@ func (r *ProviderRegistry) loadConfig(ctx context.Context, alias string) (*LLMPr
 }
 
 // createAndCache resolves the secret, creates the provider via factory, and caches it.
+// Uses singleflight to ensure only one goroutine creates a provider per alias,
+// avoiding duplicate expensive Genkit init on concurrent cold starts.
 func (r *ProviderRegistry) createAndCache(ctx context.Context, alias string, cfg *LLMProviderConfig) (provider.Provider, error) {
-	// Resolve API key from secrets
-	var apiKey string
-	if cfg.SecretName != "" && r.secrets != nil {
-		var err error
-		apiKey, err = r.secrets.Get(ctx, cfg.SecretName)
-		if err != nil {
-			return nil, fmt.Errorf("provider registry: resolve secret %q: %w", cfg.SecretName, err)
+	result, err, _ := r.sflight.Do(alias, func() (any, error) {
+		// Re-check cache under singleflight — another caller may have populated it.
+		r.mu.RLock()
+		if p, ok := r.cache[alias]; ok {
+			r.mu.RUnlock()
+			return p, nil
 		}
-	}
+		r.mu.RUnlock()
 
-	// Find factory
-	factory, ok := r.factories[cfg.Type]
-	if !ok {
-		return nil, fmt.Errorf("provider registry: unknown provider type %q", cfg.Type)
-	}
+		// Resolve API key from secrets
+		var apiKey string
+		if cfg.SecretName != "" && r.secrets != nil {
+			var err error
+			apiKey, err = r.secrets.Get(ctx, cfg.SecretName)
+			if err != nil {
+				return nil, fmt.Errorf("provider registry: resolve secret %q: %w", cfg.SecretName, err)
+			}
+		}
 
-	// Create provider
-	p, err := factory(ctx, apiKey, *cfg)
-	if err != nil {
-		return nil, fmt.Errorf("provider registry: create %q: %w", alias, err)
-	}
+		// Find factory
+		factory, ok := r.factories[cfg.Type]
+		if !ok {
+			return nil, fmt.Errorf("provider registry: unknown provider type %q", cfg.Type)
+		}
 
-	// Cache — re-check under write lock to avoid TOCTOU race
-	r.mu.Lock()
-	if existing, ok := r.cache[alias]; ok {
+		// Create provider
+		p, err := factory(ctx, apiKey, *cfg)
+		if err != nil {
+			return nil, fmt.Errorf("provider registry: create %q: %w", alias, err)
+		}
+
+		// Cache
+		r.mu.Lock()
+		r.cache[alias] = p
 		r.mu.Unlock()
-		return existing, nil
-	}
-	r.cache[alias] = p
-	r.mu.Unlock()
 
-	return p, nil
+		return p, nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return result.(provider.Provider), nil
 }
 
 // Built-in factory functions
@@ -284,7 +298,7 @@ func cohereProviderFactory(ctx context.Context, apiKey string, cfg LLMProviderCo
 func copilotModelsProviderFactory(ctx context.Context, apiKey string, cfg LLMProviderConfig) (provider.Provider, error) {
 	baseURL := cfg.BaseURL
 	if baseURL == "" {
-		baseURL = "https://models.inference.ai.azure.com"
+		baseURL = "https://models.github.ai/inference"
 	}
 	return gkprov.NewOpenAICompatibleProvider(ctx, "copilot_models", apiKey, cfg.Model, baseURL, cfg.MaxTokens)
 }
@@ -322,7 +336,11 @@ func ollamaProviderFactory(ctx context.Context, _ string, cfg LLMProviderConfig)
 
 func llamaCppProviderFactory(ctx context.Context, _ string, cfg LLMProviderConfig) (provider.Provider, error) {
 	// llama.cpp serves an OpenAI-compatible API
-	return gkprov.NewOpenAICompatibleProvider(ctx, "llama_cpp", "", cfg.Model, cfg.BaseURL, cfg.MaxTokens)
+	baseURL := cfg.BaseURL
+	if baseURL == "" {
+		baseURL = "http://127.0.0.1:8080/v1"
+	}
+	return gkprov.NewOpenAICompatibleProvider(ctx, "llama_cpp", "", cfg.Model, baseURL, cfg.MaxTokens)
 }
 
 func anthropicBedrockProviderFactory(ctx context.Context, apiKey string, cfg LLMProviderConfig) (provider.Provider, error) {

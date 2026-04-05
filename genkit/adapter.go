@@ -124,7 +124,8 @@ func (p *genkitProvider) Stream(ctx context.Context, messages []provider.Message
 				return
 			}
 			if result.Done {
-				// Extract final response for tool calls and usage
+				// Tool calls are emitted only from the final response to avoid
+				// duplicates with unstable IDs from incremental chunks.
 				if result.Response != nil {
 					final := fromGenkitResponse(result.Response)
 					for i := range final.ToolCalls {

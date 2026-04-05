@@ -19,7 +19,7 @@ import (
 // Default models per provider when none specified.
 const (
 	defaultAnthropicModel = "claude-sonnet-4-6"
-	defaultOpenAIModel    = "gpt-4o"
+	defaultOpenAIModel    = "gpt-4.1"
 	defaultGeminiModel    = "gemini-2.5-flash"
 	defaultOllamaModel    = "qwen3:8b"
 )
@@ -41,6 +41,9 @@ func NewAnthropicProvider(ctx context.Context, apiKey, model, baseURL string, ma
 	}
 	if model == "" {
 		model = defaultAnthropicModel
+	}
+	if err := provider.ValidateBaseURL(baseURL); err != nil {
+		return nil, fmt.Errorf("anthropic: %w", err)
 	}
 	p := &anthropicPlugin.Anthropic{APIKey: apiKey, BaseURL: baseURL}
 	g := initGenkitWithPlugin(ctx, gk.WithPlugins(p))
@@ -64,6 +67,9 @@ func NewOpenAIProvider(ctx context.Context, apiKey, model, baseURL string, maxTo
 	}
 	if model == "" {
 		model = defaultOpenAIModel
+	}
+	if err := provider.ValidateBaseURL(baseURL); err != nil {
+		return nil, fmt.Errorf("openai: %w", err)
 	}
 	var extraOpts []option.RequestOption
 	if baseURL != "" {
@@ -133,6 +139,18 @@ func NewOllamaProvider(ctx context.Context, model, serverAddress string, maxToke
 // NewOpenAICompatibleProvider creates a provider for OpenAI-compatible endpoints.
 // Used for OpenRouter, Copilot, Cohere, HuggingFace, llama.cpp, etc.
 func NewOpenAICompatibleProvider(ctx context.Context, providerName, apiKey, model, baseURL string, maxTokens int) (provider.Provider, error) {
+	if model == "" {
+		model = defaultOpenAIModel
+	}
+	// Skip SSRF validation for local providers that use localhost endpoints.
+	switch providerName {
+	case "llama_cpp", "local", "test":
+		// Local providers intentionally use http://localhost — skip SSRF checks.
+	default:
+		if err := provider.ValidateBaseURL(baseURL); err != nil {
+			return nil, fmt.Errorf("%s: %w", providerName, err)
+		}
+	}
 	effectiveKey := apiKey
 	if effectiveKey == "" {
 		// Use a placeholder to avoid errors when no key is needed (e.g., local endpoints)
