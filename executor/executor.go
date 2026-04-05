@@ -598,6 +598,9 @@ func drainInbox(ctx context.Context, cfg Config, messages []provider.Message, ag
 	if cfg.Inbox == nil {
 		return messages, false
 	}
+	if ctx.Err() != nil {
+		return messages, false
+	}
 	for i := 0; i < drainInboxMaxMessages; i++ {
 		select {
 		case <-ctx.Done():
