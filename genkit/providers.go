@@ -31,6 +31,7 @@ func NewAnthropicProvider(ctx context.Context, apiKey, model, baseURL string, ma
 		g:         g,
 		modelName: "anthropic/" + model,
 		name:      "anthropic",
+		maxTokens: maxTokens,
 		authInfo: provider.AuthModeInfo{
 			Mode:        "api_key",
 			DisplayName: "Anthropic",
@@ -54,6 +55,7 @@ func NewOpenAIProvider(ctx context.Context, apiKey, model, baseURL string, maxTo
 		g:         g,
 		modelName: "openai/" + model,
 		name:      "openai",
+		maxTokens: maxTokens,
 		authInfo: provider.AuthModeInfo{
 			Mode:        "api_key",
 			DisplayName: "OpenAI",
@@ -73,6 +75,7 @@ func NewGoogleAIProvider(ctx context.Context, apiKey, model string, maxTokens in
 		g:         g,
 		modelName: "googleai/" + model,
 		name:      "googleai",
+		maxTokens: maxTokens,
 		authInfo: provider.AuthModeInfo{
 			Mode:        "api_key",
 			DisplayName: "Google AI (Gemini)",
@@ -92,6 +95,7 @@ func NewOllamaProvider(ctx context.Context, model, serverAddress string, maxToke
 		g:         g,
 		modelName: "ollama/" + model,
 		name:      "ollama",
+		maxTokens: maxTokens,
 		authInfo: provider.AuthModeInfo{
 			Mode:        "none",
 			DisplayName: "Ollama (local)",
@@ -118,6 +122,7 @@ func NewOpenAICompatibleProvider(ctx context.Context, providerName, apiKey, mode
 		g:         g,
 		modelName: providerName + "/" + model,
 		name:      providerName,
+		maxTokens: maxTokens,
 		authInfo: provider.AuthModeInfo{
 			Mode:        "api_key",
 			DisplayName: providerName,
@@ -158,6 +163,7 @@ func NewAzureOpenAIProvider(ctx context.Context, resource, deploymentName, apiVe
 		g:         g,
 		modelName: "openai/" + deploymentName,
 		name:      "openai_azure",
+		maxTokens: maxTokens,
 		authInfo: provider.AuthModeInfo{
 			Mode:        "azure",
 			DisplayName: "OpenAI (Azure OpenAI Service)",
@@ -187,6 +193,7 @@ func NewAnthropicFoundryProvider(ctx context.Context, resource, model, apiKey, e
 		g:         g,
 		modelName: "anthropic/" + model,
 		name:      "anthropic_foundry",
+		maxTokens: maxTokens,
 		authInfo: provider.AuthModeInfo{
 			Mode:        "azure",
 			DisplayName: "Anthropic (Azure AI Foundry)",
@@ -212,6 +219,7 @@ func NewVertexAIProvider(ctx context.Context, projectID, region, model, credenti
 		g:         g,
 		modelName: "vertexai/" + model,
 		name:      "vertexai",
+		maxTokens: maxTokens,
 		authInfo: provider.AuthModeInfo{
 			Mode:        "gcp",
 			DisplayName: "Vertex AI",

@@ -16,6 +16,7 @@ type genkitProvider struct {
 	modelName string // "provider/model" format e.g. "anthropic/claude-sonnet-4-6"
 	name      string
 	authInfo  provider.AuthModeInfo
+	maxTokens int // 0 means use model default
 
 	mu           sync.Mutex
 	definedTools map[string]bool // tracks which tool names are registered
@@ -55,11 +56,23 @@ func (p *genkitProvider) resolveToolRefs(tools []provider.ToolDef) []ai.ToolRef 
 	return refs
 }
 
+// generationConfig returns a WithConfig option when maxTokens is configured.
+func (p *genkitProvider) generationConfig() ai.GenerateOption {
+	if p.maxTokens > 0 {
+		return ai.WithConfig(&ai.GenerationCommonConfig{MaxOutputTokens: p.maxTokens})
+	}
+	return nil
+}
+
 // Chat sends a non-streaming request and returns the complete response.
 func (p *genkitProvider) Chat(ctx context.Context, messages []provider.Message, tools []provider.ToolDef) (*provider.Response, error) {
 	opts := []ai.GenerateOption{
 		ai.WithModelName(p.modelName),
 		ai.WithMessages(toGenkitMessages(messages)...),
+	}
+
+	if cfg := p.generationConfig(); cfg != nil {
+		opts = append(opts, cfg)
 	}
 
 	if len(tools) > 0 {
@@ -84,6 +97,10 @@ func (p *genkitProvider) Stream(ctx context.Context, messages []provider.Message
 	opts := []ai.GenerateOption{
 		ai.WithModelName(p.modelName),
 		ai.WithMessages(toGenkitMessages(messages)...),
+	}
+
+	if cfg := p.generationConfig(); cfg != nil {
+		opts = append(opts, cfg)
 	}
 
 	if len(tools) > 0 {
