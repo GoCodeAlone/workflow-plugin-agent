@@ -215,6 +215,246 @@ func TestExecute_NullApproverIsDefault(t *testing.T) {
 	}
 }
 
+// TestExecute_InboxDrain verifies that messages from the Inbox channel are injected into the conversation.
+func TestExecute_InboxDrain(t *testing.T) {
+	inbox := make(chan provider.Message, 2)
+	// Pre-fill inbox with an external message before execution starts.
+	inbox <- provider.Message{Role: provider.RoleUser, Content: "Message from Agent B: the secret is 42"}
+
+	var capturedMessages []provider.Message
+	callN := 0
+	p := &captureProvider{
+		onChat: func(msgs []provider.Message) (*provider.Response, error) {
+			callN++
+			capturedMessages = msgs
+			return &provider.Response{Content: "I see the message."}, nil
+		},
+	}
+
+	cfg := Config{
+		Provider: p,
+		Inbox:    inbox,
+	}
+	result, err := Execute(context.Background(), cfg, "sys", "task", "agent-1")
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if result.Status != "completed" {
+		t.Errorf("Status: want completed, got %q", result.Status)
+	}
+
+	// The inbox message should appear in the messages passed to Chat.
+	found := false
+	for _, msg := range capturedMessages {
+		if msg.Content == "Message from Agent B: the secret is 42" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Error("expected inbox message to appear in conversation context")
+	}
+}
+
+// TestExecute_EventSequence verifies events are emitted in the correct order.
+func TestExecute_EventSequence(t *testing.T) {
+	callN := 0
+	p := &callCountProvider{
+		onChat: func() (*provider.Response, error) {
+			callN++
+			if callN == 1 {
+				return &provider.Response{
+					Content:  "Let me think...",
+					Thinking: "Reasoning about the task",
+					ToolCalls: []provider.ToolCall{
+						{ID: "tc-1", Name: "echo", Arguments: map[string]any{"msg": "hi"}},
+					},
+				}, nil
+			}
+			return &provider.Response{Content: "All done."}, nil
+		},
+	}
+
+	reg := tools.NewRegistry()
+	reg.Register(&simpleTool{
+		name: "echo",
+		def:  provider.ToolDef{Name: "echo", Description: "echoes input"},
+		fn: func(_ context.Context, args map[string]any) (any, error) {
+			return map[string]any{"echoed": args["msg"]}, nil
+		},
+	})
+
+	var events []Event
+	cfg := Config{
+		Provider:     p,
+		ToolRegistry: reg,
+		OnEvent: func(e Event) {
+			events = append(events, e)
+		},
+	}
+
+	result, err := Execute(context.Background(), cfg, "sys", "task", "agent-1")
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if result.Status != "completed" {
+		t.Errorf("Status: want completed, got %q", result.Status)
+	}
+
+	// Verify event sequence: iteration → thinking → text → tool_call_start → tool_call_result → iteration → text → completed
+	expectedTypes := []EventType{
+		EventIteration,
+		EventThinking,
+		EventText,
+		EventToolCallStart,
+		EventToolCallResult,
+		EventIteration,
+		EventText,
+		EventCompleted,
+	}
+	if len(events) != len(expectedTypes) {
+		t.Fatalf("event count: want %d, got %d\nevents: %v", len(expectedTypes), len(events), eventTypes(events))
+	}
+	for i, want := range expectedTypes {
+		if events[i].Type != want {
+			t.Errorf("event[%d]: want %q, got %q", i, want, events[i].Type)
+		}
+	}
+
+	// Verify specific event content.
+	if events[1].Content != "Reasoning about the task" {
+		t.Errorf("thinking event content: want %q, got %q", "Reasoning about the task", events[1].Content)
+	}
+	if events[3].ToolName != "echo" {
+		t.Errorf("tool_call_start tool name: want %q, got %q", "echo", events[3].ToolName)
+	}
+	if events[4].ToolName != "echo" {
+		t.Errorf("tool_call_result tool name: want %q, got %q", "echo", events[4].ToolName)
+	}
+}
+
+// TestExecute_ShouldStop verifies custom termination via ShouldStop.
+func TestExecute_ShouldStop(t *testing.T) {
+	callN := 0
+	p := &callCountProvider{
+		onChat: func() (*provider.Response, error) {
+			callN++
+			// Always return a tool call to keep the loop going.
+			return &provider.Response{
+				ToolCalls: []provider.ToolCall{
+					{ID: fmt.Sprintf("tc-%d", callN), Name: "counter", Arguments: map[string]any{"n": callN}},
+				},
+			}, nil
+		},
+	}
+
+	reg := tools.NewRegistry()
+	reg.Register(&simpleTool{
+		name: "counter",
+		def:  provider.ToolDef{Name: "counter", Description: "counts"},
+		fn: func(_ context.Context, _ map[string]any) (any, error) {
+			return map[string]any{"ok": true}, nil
+		},
+	})
+
+	stopAfter := 2
+	iteration := 0
+	cfg := Config{
+		Provider:      p,
+		ToolRegistry:  reg,
+		MaxIterations: 10,
+		ShouldStop: func() string {
+			iteration++
+			if iteration >= stopAfter {
+				return "agent marked done"
+			}
+			return ""
+		},
+	}
+
+	result, err := Execute(context.Background(), cfg, "sys", "task", "agent-1")
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if result.Status != "completed" {
+		t.Errorf("Status: want completed, got %q", result.Status)
+	}
+	if result.Content != "agent marked done" {
+		t.Errorf("Content: want %q, got %q", "agent marked done", result.Content)
+	}
+	if result.Iterations > 3 {
+		t.Errorf("Iterations: want <= 3, got %d (should have stopped early)", result.Iterations)
+	}
+}
+
+// TestExecute_EventOnFailure verifies that EventFailed is emitted on provider error.
+func TestExecute_EventOnFailure(t *testing.T) {
+	p := &mockProvider{
+		name:    "mock",
+		chatErr: fmt.Errorf("LLM unavailable"),
+	}
+
+	var events []Event
+	cfg := Config{
+		Provider: p,
+		OnEvent: func(e Event) {
+			events = append(events, e)
+		},
+	}
+
+	result, err := Execute(context.Background(), cfg, "sys", "task", "agent-1")
+	if err != nil {
+		t.Fatalf("Execute returned error: %v", err)
+	}
+	if result.Status != "failed" {
+		t.Errorf("Status: want failed, got %q", result.Status)
+	}
+
+	// Should see: iteration → failed
+	if len(events) < 2 {
+		t.Fatalf("expected at least 2 events, got %d", len(events))
+	}
+	if events[0].Type != EventIteration {
+		t.Errorf("event[0]: want %q, got %q", EventIteration, events[0].Type)
+	}
+	if events[1].Type != EventFailed {
+		t.Errorf("event[1]: want %q, got %q", EventFailed, events[1].Type)
+	}
+	if events[1].Error == "" {
+		t.Error("failed event should have non-empty Error")
+	}
+}
+
+// TestExecute_NilCallbacksBackwardCompat verifies that nil OnEvent, Inbox, ShouldStop work.
+func TestExecute_NilCallbacksBackwardCompat(t *testing.T) {
+	p := &mockProvider{
+		name:         "mock",
+		chatResponse: &provider.Response{Content: "ok"},
+	}
+	cfg := Config{
+		Provider:   p,
+		OnEvent:    nil,
+		Inbox:      nil,
+		ShouldStop: nil,
+	}
+	result, err := Execute(context.Background(), cfg, "sys", "task", "agent-1")
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if result.Status != "completed" {
+		t.Errorf("Status: want completed, got %q", result.Status)
+	}
+}
+
+// eventTypes extracts the Type from each event for diagnostic output.
+func eventTypes(events []Event) []EventType {
+	out := make([]EventType, len(events))
+	for i, e := range events {
+		out[i] = e.Type
+	}
+	return out
+}
+
 // TestExecute_ThinkingInResult verifies Result.Thinking is populated from provider response.
 func TestExecute_ThinkingInResult(t *testing.T) {
 	p := &mockProvider{
