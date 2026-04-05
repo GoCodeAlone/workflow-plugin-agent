@@ -54,6 +54,19 @@ type Config struct {
 	// TaskID and ProjectID are used for transcript recording.
 	TaskID    string
 	ProjectID string
+
+	// Inbox receives external messages injected into the conversation
+	// between loop iterations. Nil means no external messages.
+	Inbox <-chan provider.Message
+
+	// OnEvent is called for each executor event. Nil means no events emitted.
+	// The callback must not block — use a buffered channel internally if needed.
+	OnEvent func(Event)
+
+	// ShouldStop is called after each tool execution round. If it returns
+	// a non-empty string, the loop exits with status "completed" and that
+	// string as the Result.Content. Nil means no custom termination.
+	ShouldStop func() (reason string)
 }
 
 // Result is the outcome of an Execute call.
@@ -151,6 +164,21 @@ func Execute(ctx context.Context, cfg Config, systemPrompt, userTask, agentID st
 	for iterCount < cfg.MaxIterations {
 		iterCount++
 
+		// Emit iteration event
+		emit(cfg, Event{
+			Type:      EventIteration,
+			AgentID:   agentID,
+			Iteration: iterCount,
+		})
+
+		// Drain inbox: append any externally injected messages to the conversation
+		// BEFORE the compaction check, so compaction accounts for injected messages.
+		var inboxClosed bool
+		messages, inboxClosed = drainInbox(ctx, cfg, messages, agentID, iterCount)
+		if inboxClosed {
+			cfg.Inbox = nil // Avoid unnecessary selects on subsequent iterations.
+		}
+
 		// Context window management: compact if approaching model's token limit.
 		if cm.NeedsCompaction(messages) {
 			messages = cm.Compact(ctx, messages, cfg.Provider)
@@ -176,6 +204,12 @@ func Execute(ctx context.Context, cfg Config, systemPrompt, userTask, agentID st
 		resp, err := cfg.Provider.Chat(ctx, messages, toolDefs)
 		if err != nil {
 			errMsg := fmt.Sprintf("LLM call failed at iteration %d: %v", iterCount, err)
+			emit(cfg, Event{
+				Type:      EventFailed,
+				AgentID:   agentID,
+				Iteration: iterCount,
+				Error:     errMsg,
+			})
 			return &Result{
 				Content:    errMsg,
 				Status:     "failed",
@@ -186,6 +220,26 @@ func Execute(ctx context.Context, cfg Config, systemPrompt, userTask, agentID st
 
 		finalContent = resp.Content
 		finalThinking = resp.Thinking
+
+		// Emit thinking event
+		if resp.Thinking != "" {
+			emit(cfg, Event{
+				Type:      EventThinking,
+				AgentID:   agentID,
+				Iteration: iterCount,
+				Content:   resp.Thinking,
+			})
+		}
+
+		// Emit text event
+		if resp.Content != "" {
+			emit(cfg, Event{
+				Type:      EventText,
+				AgentID:   agentID,
+				Iteration: iterCount,
+				Content:   resp.Content,
+			})
+		}
 
 		// Record assistant response
 		_ = cfg.Transcript.Record(ctx, TranscriptEntry{
@@ -215,6 +269,17 @@ func Execute(ctx context.Context, cfg Config, systemPrompt, userTask, agentID st
 		for _, tc := range resp.ToolCalls {
 			var resultStr string
 			var isError bool
+
+			// Emit tool call start event with a copy of the arguments to prevent
+			// any OnEvent handler from mutating the map used by the tool execution.
+			emit(cfg, Event{
+				Type:       EventToolCallStart,
+				AgentID:    agentID,
+				Iteration:  iterCount,
+				ToolName:   tc.Name,
+				ToolCallID: tc.ID,
+				ToolArgs:   copyArgs(tc.Arguments),
+			})
 
 			if cfg.ToolRegistry != nil {
 				// Build tool context with agent/task IDs
@@ -285,6 +350,17 @@ func Execute(ctx context.Context, cfg Config, systemPrompt, userTask, agentID st
 				ToolCallID: tc.ID,
 			})
 
+			// Emit tool call result event
+			emit(cfg, Event{
+				Type:       EventToolCallResult,
+				AgentID:    agentID,
+				Iteration:  iterCount,
+				ToolName:   tc.Name,
+				ToolCallID: tc.ID,
+				ToolResult: resultStr,
+				ToolError:  isError,
+			})
+
 			// Loop detection
 			ld.Record(tc.Name, tc.Arguments, resultStr, isError)
 			loopStatus, loopMsg := ld.Check()
@@ -323,6 +399,23 @@ func Execute(ctx context.Context, cfg Config, systemPrompt, userTask, agentID st
 				}, nil
 			}
 		}
+
+		// Custom termination: check ShouldStop after all tool calls are processed.
+		if cfg.ShouldStop != nil {
+			if reason := cfg.ShouldStop(); reason != "" {
+				emit(cfg, Event{
+					Type:      EventCompleted,
+					AgentID:   agentID,
+					Iteration: iterCount,
+					Content:   reason,
+				})
+				return &Result{
+					Content:    reason,
+					Status:     "completed",
+					Iterations: iterCount,
+				}, nil
+			}
+		}
 	}
 
 	// Auto-extraction: save key facts from the conversation to persistent memory.
@@ -342,6 +435,14 @@ func Execute(ctx context.Context, cfg Config, systemPrompt, userTask, agentID st
 			_ = cfg.Memory.ExtractAndSave(ctx, agentID, transcriptBuilder.String(), embedder)
 		}
 	}
+
+	// Emit completed event
+	emit(cfg, Event{
+		Type:      EventCompleted,
+		AgentID:   agentID,
+		Iteration: iterCount,
+		Content:   finalContent,
+	})
 
 	return &Result{
 		Content:    finalContent,
@@ -426,5 +527,57 @@ func handleHumanRequestWait(ctx context.Context, toolResult string, cfg Config) 
 		return "Human request timed out. No response was received within the timeout period.", true
 	default:
 		return "", false
+	}
+}
+
+// emit calls cfg.OnEvent if non-nil.
+func emit(cfg Config, event Event) {
+	if cfg.OnEvent != nil {
+		cfg.OnEvent(event)
+	}
+}
+
+// copyArgs returns a shallow copy of the arguments map so that event handlers
+// cannot mutate the original map used by tool execution.
+func copyArgs(args map[string]any) map[string]any {
+	if args == nil {
+		return nil
+	}
+	cp := make(map[string]any, len(args))
+	for k, v := range args {
+		cp[k] = v
+	}
+	return cp
+}
+
+// drainInbox non-blockingly drains all pending messages from cfg.Inbox
+// and appends them to the conversation. Returns the updated message slice
+// and a boolean indicating whether the inbox channel was closed.
+// If cfg.Inbox is nil, returns messages unchanged.
+func drainInbox(ctx context.Context, cfg Config, messages []provider.Message, agentID string, iteration int) ([]provider.Message, bool) {
+	if cfg.Inbox == nil {
+		return messages, false
+	}
+	for {
+		select {
+		case msg, ok := <-cfg.Inbox:
+			if !ok {
+				// Channel closed — stop draining.
+				return messages, true
+			}
+			messages = append(messages, msg)
+			_ = cfg.Transcript.Record(ctx, TranscriptEntry{
+				ID:        uuid.New().String(),
+				AgentID:   agentID,
+				TaskID:    cfg.TaskID,
+				ProjectID: cfg.ProjectID,
+				Iteration: iteration,
+				Role:      msg.Role,
+				Content:   msg.Content,
+			})
+		default:
+			// No more pending messages.
+			return messages, false
+		}
 	}
 }
