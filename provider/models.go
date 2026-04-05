@@ -8,6 +8,10 @@ import (
 	"net/http"
 	"sort"
 	"strings"
+
+	"github.com/google/generative-ai-go/genai"
+	"google.golang.org/api/iterator"
+	googleoption "google.golang.org/api/option"
 )
 
 // ModelInfo describes an available model from a provider.
@@ -15,6 +19,23 @@ type ModelInfo struct {
 	ID            string `json:"id"`
 	Name          string `json:"name"`
 	ContextWindow int    `json:"context_window,omitempty"`
+}
+
+// Constants used by model-listing functions, sourced from former provider files.
+const (
+	defaultAnthropicBaseURL = "https://api.anthropic.com"
+	anthropicAPIVersion     = "2023-06-01"
+	defaultOpenAIBaseURL    = "https://api.openai.com"
+	defaultCopilotBaseURL   = "https://api.githubcopilot.com"
+	copilotTokenExchangeURL = "https://api.github.com/copilot_internal/v2/token"
+	copilotEditorVersion    = "ratchet/0.1.0"
+	defaultCohereBaseURL    = "https://api.cohere.com"
+)
+
+// copilotTokenResponse is the response from the Copilot token exchange endpoint.
+type copilotTokenResponse struct {
+	Token     string `json:"token"`
+	ExpiresAt int64  `json:"expires_at"`
 }
 
 // ListModels fetches available models from the given provider type.
@@ -429,10 +450,49 @@ func foundryFallbackModels() []ModelInfo {
 	}
 }
 
+// listGeminiModels lists available Gemini models using the genai SDK.
+func listGeminiModels(ctx context.Context, apiKey string) ([]ModelInfo, error) {
+	client, err := genai.NewClient(ctx, googleoption.WithAPIKey(apiKey))
+	if err != nil {
+		return geminiFallbackModels(), nil
+	}
+	defer client.Close()
+
+	iter := client.ListModels(ctx)
+	var models []ModelInfo
+	for {
+		m, err := iter.Next()
+		if err == iterator.Done {
+			break
+		}
+		if err != nil {
+			return geminiFallbackModels(), nil
+		}
+		models = append(models, ModelInfo{
+			ID:   m.Name,
+			Name: m.DisplayName,
+		})
+	}
+	if len(models) == 0 {
+		return geminiFallbackModels(), nil
+	}
+	return models, nil
+}
+
+func geminiFallbackModels() []ModelInfo {
+	return []ModelInfo{
+		{ID: "gemini-2.5-pro-preview-03-25", Name: "Gemini 2.5 Pro Preview"},
+		{ID: "gemini-2.0-flash", Name: "Gemini 2.0 Flash"},
+		{ID: "gemini-2.0-flash-lite", Name: "Gemini 2.0 Flash-Lite"},
+		{ID: "gemini-1.5-pro", Name: "Gemini 1.5 Pro"},
+		{ID: "gemini-1.5-flash", Name: "Gemini 1.5 Flash"},
+	}
+}
+
 // listOllamaModels lists models available on a local Ollama server.
 func listOllamaModels(ctx context.Context, baseURL string) ([]ModelInfo, error) {
-	p := NewOllamaProvider(OllamaConfig{BaseURL: baseURL})
-	return p.ListModels(ctx)
+	c := NewOllamaClient(baseURL)
+	return c.ListModels(ctx)
 }
 
 func truncate(s string, maxLen int) string {

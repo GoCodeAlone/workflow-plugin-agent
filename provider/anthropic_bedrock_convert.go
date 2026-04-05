@@ -10,6 +10,8 @@ import (
 	"github.com/anthropics/anthropic-sdk-go/packages/ssestream"
 )
 
+const defaultAnthropicMaxTokens = 4096
+
 // toAnthropicParams converts provider types to SDK MessageNewParams.
 func toAnthropicParams(model string, maxTokens int, messages []Message, tools []ToolDef) anthropic.MessageNewParams {
 	params := anthropic.MessageNewParams{
