@@ -304,6 +304,12 @@ func Execute(ctx context.Context, cfg Config, systemPrompt, userTask, agentID st
 			// Handle approval gates
 			if tc.Name == "request_approval" && !isError {
 				if approvalOutput, breakLoop := handleApprovalWait(ctx, resultStr, cfg); breakLoop {
+					emit(cfg, Event{
+						Type:      EventFailed,
+						AgentID:   agentID,
+						Iteration: iterCount,
+						Error:     approvalOutput,
+					})
 					return &Result{
 						Content:    approvalOutput,
 						Status:     "approval_timeout",
@@ -318,6 +324,12 @@ func Execute(ctx context.Context, cfg Config, systemPrompt, userTask, agentID st
 			// Handle human request blocking
 			if tc.Name == "request_human" && !isError {
 				if blockingOutput, breakLoop := handleHumanRequestWait(ctx, resultStr, cfg); breakLoop {
+					emit(cfg, Event{
+						Type:      EventFailed,
+						AgentID:   agentID,
+						Iteration: iterCount,
+						Error:     blockingOutput,
+					})
 					return &Result{
 						Content:    blockingOutput,
 						Status:     "request_expired",
@@ -391,6 +403,12 @@ func Execute(ctx context.Context, cfg Config, systemPrompt, userTask, agentID st
 					Role:      provider.RoleUser,
 					Content:   "[SYSTEM] " + breakMsg,
 				})
+				emit(cfg, Event{
+					Type:      EventFailed,
+					AgentID:   agentID,
+					Iteration: iterCount,
+					Error:     breakMsg,
+				})
 				return &Result{
 					Content:    breakMsg,
 					Status:     "loop_detected",
@@ -413,6 +431,7 @@ func Execute(ctx context.Context, cfg Config, systemPrompt, userTask, agentID st
 					Content:    reason,
 					Status:     "completed",
 					Iterations: iterCount,
+					Thinking:   finalThinking,
 				}, nil
 			}
 		}
@@ -530,11 +549,16 @@ func handleHumanRequestWait(ctx context.Context, toolResult string, cfg Config) 
 	}
 }
 
-// emit calls cfg.OnEvent if non-nil.
+// emit calls cfg.OnEvent if non-nil. It recovers from any panic in the
+// handler so that a misbehaving observer cannot crash the executor run.
 func emit(cfg Config, event Event) {
-	if cfg.OnEvent != nil {
-		cfg.OnEvent(event)
+	if cfg.OnEvent == nil {
+		return
 	}
+	func() {
+		defer func() { recover() }() //nolint:errcheck
+		cfg.OnEvent(event)
+	}()
 }
 
 // copyArgs returns a shallow copy of the arguments map so that event handlers

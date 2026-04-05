@@ -504,6 +504,70 @@ func TestExecute_ToolArgsEventIsCopy(t *testing.T) {
 	}
 }
 
+// TestExecute_OnEventPanicDoesNotCrashExecutor verifies that a panicking OnEvent
+// callback does not abort the executor run.
+func TestExecute_OnEventPanicDoesNotCrashExecutor(t *testing.T) {
+	p := &mockProvider{
+		name:         "mock",
+		chatResponse: &provider.Response{Content: "done"},
+	}
+	cfg := Config{
+		Provider: p,
+		OnEvent: func(e Event) {
+			panic("simulated observer panic")
+		},
+	}
+	result, err := Execute(context.Background(), cfg, "sys", "task", "agent-1")
+	if err != nil {
+		t.Fatalf("Execute returned error: %v", err)
+	}
+	if result.Status != "completed" {
+		t.Errorf("Status: want %q, got %q", "completed", result.Status)
+	}
+}
+
+// TestExecute_ShouldStopThinkingPopulated verifies that Result.Thinking is set
+// when ShouldStop triggers an early exit.
+func TestExecute_ShouldStopThinkingPopulated(t *testing.T) {
+	callN := 0
+	p := &callCountProvider{
+		onChat: func() (*provider.Response, error) {
+			callN++
+			if callN == 1 {
+				return &provider.Response{
+					Thinking: "internal reasoning",
+					ToolCalls: []provider.ToolCall{
+						{ID: "tc-1", Name: "noop", Arguments: map[string]any{}},
+					},
+				}, nil
+			}
+			return &provider.Response{Content: "done"}, nil
+		},
+	}
+
+	reg := tools.NewRegistry()
+	reg.Register(&simpleTool{
+		name: "noop",
+		def:  provider.ToolDef{Name: "noop", Description: "does nothing"},
+		fn:   func(_ context.Context, _ map[string]any) (any, error) { return "ok", nil },
+	})
+
+	result, err := Execute(context.Background(), Config{
+		Provider:     p,
+		ToolRegistry: reg,
+		ShouldStop:   func() string { return "stop reason" },
+	}, "sys", "task", "agent-1")
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if result.Status != "completed" {
+		t.Errorf("Status: want %q, got %q", "completed", result.Status)
+	}
+	if result.Thinking != "internal reasoning" {
+		t.Errorf("Thinking: want %q, got %q", "internal reasoning", result.Thinking)
+	}
+}
+
 // eventTypes extracts the Type from each event for diagnostic output.
 func eventTypes(events []Event) []EventType {
 	out := make([]EventType, len(events))

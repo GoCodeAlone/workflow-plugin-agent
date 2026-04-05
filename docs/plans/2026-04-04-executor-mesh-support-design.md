@@ -32,7 +32,7 @@ type Config struct {
 }
 ```
 
-**Behavior:** At the top of each loop iteration (after compaction check, before the `provider.Chat()` call), drain all pending messages from `Inbox` and append them to the conversation. This is non-blocking — if no messages are waiting, the loop proceeds immediately.
+**Behavior:** At the top of each loop iteration (before the compaction check and before the `provider.Chat()` call), drain all pending messages from `Inbox` and append them to the conversation. This is non-blocking — if no messages are waiting, the loop proceeds immediately. Injected messages are therefore visible to the subsequent compaction check.
 
 This lets the mesh push messages from other agents into a running agent's conversation as user-role messages.
 

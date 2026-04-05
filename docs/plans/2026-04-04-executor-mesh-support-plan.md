@@ -40,8 +40,8 @@ Modify `executor/executor.go`.
 
 Modify `executor/executor.go` — the main loop in `Execute()`.
 
-- At the top of each iteration (after compaction, before `provider.Chat()`), call a new `drainInbox()` helper
-- `drainInbox()` does a non-blocking select loop on `cfg.Inbox`, appending any received messages to the conversation
+- At the top of each iteration (before compaction is checked and before `provider.Chat()`), call a new `drainInbox()` helper
+- `drainInbox()` does a non-blocking select loop on `cfg.Inbox`, appending any received messages to the conversation so injected messages are visible to subsequent compaction checks
 - If `cfg.Inbox` is nil, skip entirely
 - Record drained messages via TranscriptRecorder
 
