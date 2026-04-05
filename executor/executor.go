@@ -271,8 +271,9 @@ func Execute(ctx context.Context, cfg Config, systemPrompt, userTask, agentID st
 			var resultStr string
 			var isError bool
 
-			// Emit tool call start event with a copy of the arguments to prevent
-			// any OnEvent handler from mutating the map used by the tool execution.
+			// Emit tool call start event with a shallow copy of the arguments so
+			// that OnEvent handlers cannot replace top-level keys used by tool
+			// execution (nested values are still shared; see copyArgs).
 			emit(cfg, Event{
 				Type:       EventToolCallStart,
 				AgentID:    agentID,
@@ -567,7 +568,10 @@ func emit(cfg Config, event Event) {
 }
 
 // copyArgs returns a shallow copy of the arguments map so that event handlers
-// cannot mutate the original map used by tool execution.
+// cannot mutate top-level keys used by tool execution. Note: nested maps or
+// slices are still shared, so deeply-nested mutations by an OnEvent handler
+// would still be visible to the tool. This is an acceptable trade-off given
+// that tool arguments rarely contain nested mutable structures.
 func copyArgs(args map[string]any) map[string]any {
 	if args == nil {
 		return nil
@@ -579,34 +583,50 @@ func copyArgs(args map[string]any) map[string]any {
 	return cp
 }
 
-// drainInbox non-blockingly drains all pending messages from cfg.Inbox
-// and appends them to the conversation. Returns the updated message slice
+// drainInboxMaxMessages is the maximum number of messages drained from Inbox
+// per iteration to prevent a fast producer from starving the executor loop.
+const drainInboxMaxMessages = 100
+
+// drainInbox non-blockingly drains pending messages from cfg.Inbox
+// and appends them to the conversation. At most drainInboxMaxMessages are
+// consumed per call to prevent starvation. Returns the updated message slice
 // and a boolean indicating whether the inbox channel was closed.
-// If cfg.Inbox is nil, returns messages unchanged.
+// Inbox messages are normalized to RoleUser with tool-related fields cleared to
+// prevent prompt injection via unexpected roles. If cfg.Inbox is nil, returns
+// messages unchanged.
 func drainInbox(ctx context.Context, cfg Config, messages []provider.Message, agentID string, iteration int) ([]provider.Message, bool) {
 	if cfg.Inbox == nil {
 		return messages, false
 	}
-	for {
+	for i := 0; i < drainInboxMaxMessages; i++ {
 		select {
+		case <-ctx.Done():
+			return messages, false
 		case msg, ok := <-cfg.Inbox:
 			if !ok {
 				// Channel closed — stop draining.
 				return messages, true
 			}
-			messages = append(messages, msg)
+			// Normalize to RoleUser and clear tool-related fields to prevent
+			// prompt injection via unexpected roles (system, assistant, tool).
+			normalized := provider.Message{
+				Role:    provider.RoleUser,
+				Content: msg.Content,
+			}
+			messages = append(messages, normalized)
 			_ = cfg.Transcript.Record(ctx, TranscriptEntry{
 				ID:        uuid.New().String(),
 				AgentID:   agentID,
 				TaskID:    cfg.TaskID,
 				ProjectID: cfg.ProjectID,
 				Iteration: iteration,
-				Role:      msg.Role,
-				Content:   msg.Content,
+				Role:      normalized.Role,
+				Content:   normalized.Content,
 			})
 		default:
 			// No more pending messages.
 			return messages, false
 		}
 	}
+	return messages, false
 }
