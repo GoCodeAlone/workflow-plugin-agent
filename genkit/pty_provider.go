@@ -224,11 +224,21 @@ func (p *ptyProvider) waitForPrompt(ctx context.Context, ptmx *os.File, deadline
 		}
 
 		screen := p.vt.String()
+		lower := strings.ToLower(screen)
 
-		// Auto-handle trust prompts (e.g., "trust this folder" in Claude Code)
-		if strings.Contains(screen, "trust") && strings.Contains(screen, "Yes") {
+		// Auto-handle trust/safety prompts before checking for the actual input prompt.
+		// Both Claude Code and Copilot show trust dialogs on first use in a directory.
+		if (strings.Contains(lower, "trust") || strings.Contains(lower, "safety check")) &&
+			(strings.Contains(screen, "Yes") || strings.Contains(screen, "Enter to confirm") || strings.Contains(screen, "Enter to select")) {
 			ptmx.Write([]byte{'\r'})
-			time.Sleep(1 * time.Second)
+			time.Sleep(2 * time.Second)
+			continue
+		}
+
+		// Only detect the actual input prompt if we're NOT in a trust/dialog screen.
+		if strings.Contains(screen, "Confirm folder") || strings.Contains(screen, "safety check") {
+			// Still in a dialog — wait
+			time.Sleep(500 * time.Millisecond)
 			continue
 		}
 
@@ -284,13 +294,34 @@ func (p *ptyProvider) readResponse(ctx context.Context, ptmx *os.File, deadline 
 	}
 }
 
-// extractResponse extracts the assistant's response text from the virtual terminal screen.
-// It looks for text between the user's message and the next prompt indicator.
+// extractResponse extracts the most recent assistant response from the virtual terminal screen.
+// Handles multiple output formats:
+//   - Claude Code: response text appears between greyed ❯ (user input) and new ❯ prompt
+//   - Copilot: responses are prefixed with ● (bullet marker)
 func (p *ptyProvider) extractResponse(screen string) string {
 	lines := strings.Split(screen, "\n")
 	var response []string
-	inResponse := false
 
+	// Strategy 1: Look for ● (Copilot-style response markers).
+	// Collect all ● lines as response text.
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmed, "●") && !strings.Contains(trimmed, "💡") && !strings.Contains(trimmed, "Environment") {
+			// Remove the ● prefix
+			text := strings.TrimSpace(strings.TrimPrefix(trimmed, "●"))
+			if text != "" {
+				response = append(response, text)
+			}
+		}
+	}
+	if len(response) > 0 {
+		// Return the LAST response (most recent turn)
+		return response[len(response)-1]
+	}
+
+	// Strategy 2: Look for text between greyed ❯ and the next ❯ prompt (Claude Code style).
+	inResponse := false
+	response = nil
 	for _, line := range lines {
 		trimmed := strings.TrimSpace(line)
 
@@ -304,10 +335,6 @@ func (p *ptyProvider) extractResponse(screen string) string {
 
 		// Skip horizontal rules (box-drawing chars)
 		if len(trimmed) > 5 && strings.Count(trimmed, "─") > len(trimmed)/2 {
-			if inResponse {
-				// A horizontal rule after response content likely means end of response area
-				continue
-			}
 			continue
 		}
 

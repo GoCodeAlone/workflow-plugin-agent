@@ -137,21 +137,20 @@ func (CopilotCLIAdapter) HealthCheckArgs() []string {
 	return []string{"-p", "say ok"}
 }
 
-var copilotPromptRegex = regexp.MustCompile(`(?m)^>\s`)
+// copilotPromptRegex matches the Copilot input prompt: ❯ followed by placeholder text.
+// The current prompt has "Type @" in it; prior input prompts are greyed ❯ with user text.
+var copilotPromptRegex = regexp.MustCompile(`❯\s+(Type @|$)`)
 
 func (CopilotCLIAdapter) DetectPrompt(output string) bool {
-	clean := stripANSI(output)
-	return copilotPromptRegex.MatchString(clean)
+	// The input prompt shows "❯  Type @..." — this is distinct from greyed prior-input ❯ lines.
+	return copilotPromptRegex.MatchString(output)
 }
 
 func (CopilotCLIAdapter) DetectResponseEnd(output string) bool {
-	clean := stripANSI(output)
-	locs := copilotPromptRegex.FindAllStringIndex(clean, -1)
-	if len(locs) < 2 {
-		return false
-	}
-	between := clean[locs[0][1]:locs[1][0]]
-	return strings.TrimSpace(between) != ""
+	// Response is complete when we see ● (assistant marker) followed by a new ❯ prompt.
+	hasResponse := strings.Contains(output, "●")
+	hasNewPrompt := copilotPromptRegex.MatchString(output)
+	return hasResponse && hasNewPrompt
 }
 
 func (CopilotCLIAdapter) ParseResponse(raw string) string {
