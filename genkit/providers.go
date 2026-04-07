@@ -4,7 +4,9 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"os/exec"
 	"sync"
+	"time"
 
 	"github.com/GoCodeAlone/workflow-plugin-agent/provider"
 	gk "github.com/firebase/genkit/go/genkit"
@@ -315,6 +317,52 @@ func NewVertexAIProvider(ctx context.Context, projectID, region, model, credenti
 			ServerSafe:  true,
 		},
 	}, nil
+}
+
+// newPTYProvider creates a ptyProvider for the given CLIAdapter.
+// workDir optionally sets the working directory for the CLI process.
+func newPTYProvider(adapter CLIAdapter, workDir string) (provider.Provider, error) {
+	binPath, err := exec.LookPath(adapter.Binary())
+	if err != nil {
+		return nil, fmt.Errorf("pty provider %s: binary %q not found in PATH: %w", adapter.Name(), adapter.Binary(), err)
+	}
+	return &ptyProvider{
+		adapter: adapter,
+		binPath: binPath,
+		workDir: workDir,
+		timeout: 5 * time.Minute,
+		authInfo: provider.AuthModeInfo{
+			Mode:        "none",
+			DisplayName: adapter.Name(),
+			Description: "CLI-driven provider via PTY",
+			ServerSafe:  false,
+		},
+	}, nil
+}
+
+// NewClaudeCodeProvider creates a provider backed by the `claude` CLI.
+func NewClaudeCodeProvider(workDir string) (provider.Provider, error) {
+	return newPTYProvider(ClaudeCodeAdapter{}, workDir)
+}
+
+// NewCopilotCLIProvider creates a provider backed by the `copilot` CLI.
+func NewCopilotCLIProvider(workDir string) (provider.Provider, error) {
+	return newPTYProvider(CopilotCLIAdapter{}, workDir)
+}
+
+// NewCodexCLIProvider creates a provider backed by the `codex` CLI.
+func NewCodexCLIProvider(workDir string) (provider.Provider, error) {
+	return newPTYProvider(CodexCLIAdapter{}, workDir)
+}
+
+// NewGeminiCLIProvider creates a provider backed by the `gemini` CLI.
+func NewGeminiCLIProvider(workDir string) (provider.Provider, error) {
+	return newPTYProvider(GeminiCLIAdapter{}, workDir)
+}
+
+// NewCursorCLIProvider creates a provider backed by the `agent` CLI (Cursor).
+func NewCursorCLIProvider(workDir string) (provider.Provider, error) {
+	return newPTYProvider(CursorCLIAdapter{}, workDir)
 }
 
 // NewBedrockProvider creates a provider for AWS Bedrock using an OpenAI-compatible endpoint.

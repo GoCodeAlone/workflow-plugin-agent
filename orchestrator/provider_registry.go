@@ -75,6 +75,11 @@ func NewProviderRegistry(db *sql.DB, secretsProvider secrets.Provider) *Provider
 	r.factories["gemini"] = geminiProviderFactory
 	r.factories["ollama"] = ollamaProviderFactory
 	r.factories["llama_cpp"] = llamaCppProviderFactory
+	r.factories["claude_code"] = claudeCodeProviderFactory
+	r.factories["copilot_cli"] = copilotCLIProviderFactory
+	r.factories["codex_cli"] = codexCLIProviderFactory
+	r.factories["gemini_cli"] = geminiCLIProviderFactory
+	r.factories["cursor_cli"] = cursorCLIProviderFactory
 
 	return r
 }
@@ -347,4 +352,24 @@ func anthropicBedrockProviderFactory(ctx context.Context, apiKey string, cfg LLM
 	s := cfg.settings()
 	return gkprov.NewBedrockProvider(ctx,
 		s["region"], cfg.Model, s["access_key_id"], apiKey, s["session_token"], cfg.BaseURL, cfg.MaxTokens)
+}
+
+func claudeCodeProviderFactory(_ context.Context, _ string, cfg LLMProviderConfig) (provider.Provider, error) {
+	return gkprov.NewClaudeCodeProvider(cfg.BaseURL)
+}
+
+func copilotCLIProviderFactory(_ context.Context, _ string, cfg LLMProviderConfig) (provider.Provider, error) {
+	return gkprov.NewCopilotCLIProvider(cfg.BaseURL)
+}
+
+func codexCLIProviderFactory(_ context.Context, _ string, cfg LLMProviderConfig) (provider.Provider, error) {
+	return gkprov.NewCodexCLIProvider(cfg.BaseURL)
+}
+
+func geminiCLIProviderFactory(_ context.Context, _ string, cfg LLMProviderConfig) (provider.Provider, error) {
+	return gkprov.NewGeminiCLIProvider(cfg.BaseURL)
+}
+
+func cursorCLIProviderFactory(_ context.Context, _ string, cfg LLMProviderConfig) (provider.Provider, error) {
+	return gkprov.NewCursorCLIProvider(cfg.BaseURL)
 }

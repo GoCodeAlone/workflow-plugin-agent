@@ -9,6 +9,7 @@ require (
 	github.com/anthropics/anthropic-sdk-go v1.26.0
 	github.com/aws/aws-sdk-go-v2 v1.41.4
 	github.com/aws/aws-sdk-go-v2/credentials v1.19.12
+	github.com/creack/pty v1.1.24
 	github.com/docker/docker v28.5.2+incompatible
 	github.com/firebase/genkit/go v1.6.0
 	github.com/go-rod/rod v0.116.2

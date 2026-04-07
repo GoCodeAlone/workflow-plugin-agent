@@ -78,6 +78,21 @@ func NewProviderRegistry(db *sql.DB, secretsProvider secrets.Provider) *Provider
 	r.Factories["llama_cpp"] = func(ctx context.Context, _ string, cfg LLMProviderConfig) (provider.Provider, error) {
 		return gkprov.NewOpenAICompatibleProvider(ctx, "llama_cpp", "", cfg.Model, cfg.BaseURL, cfg.MaxTokens)
 	}
+	r.Factories["claude_code"] = func(_ context.Context, _ string, cfg LLMProviderConfig) (provider.Provider, error) {
+		return gkprov.NewClaudeCodeProvider(cfg.BaseURL)
+	}
+	r.Factories["copilot_cli"] = func(_ context.Context, _ string, cfg LLMProviderConfig) (provider.Provider, error) {
+		return gkprov.NewCopilotCLIProvider(cfg.BaseURL)
+	}
+	r.Factories["codex_cli"] = func(_ context.Context, _ string, cfg LLMProviderConfig) (provider.Provider, error) {
+		return gkprov.NewCodexCLIProvider(cfg.BaseURL)
+	}
+	r.Factories["gemini_cli"] = func(_ context.Context, _ string, cfg LLMProviderConfig) (provider.Provider, error) {
+		return gkprov.NewGeminiCLIProvider(cfg.BaseURL)
+	}
+	r.Factories["cursor_cli"] = func(_ context.Context, _ string, cfg LLMProviderConfig) (provider.Provider, error) {
+		return gkprov.NewCursorCLIProvider(cfg.BaseURL)
+	}
 
 	return r
 }
