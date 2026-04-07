@@ -42,10 +42,11 @@ type ptyProvider struct {
 	timeout  time.Duration
 
 	// PTY session state (kept alive for multi-turn streaming)
-	mu     sync.Mutex
-	ptmx   *os.File  // PTY master — nil when no active session
-	cmd    *exec.Cmd // running CLI process
-	output bytes.Buffer
+	mu        sync.Mutex // guards ptmx, cmd, output field pointers
+	sessionMu sync.Mutex // serializes full turn lifecycle (prompt→send→read)
+	ptmx      *os.File   // PTY master — nil when no active session
+	cmd       *exec.Cmd  // running CLI process
+	output    bytes.Buffer
 }
 
 // Name implements provider.Provider.
@@ -104,9 +105,12 @@ func (p *ptyProvider) Stream(ctx context.Context, messages []provider.Message, _
 }
 
 // streamInteractive manages the PTY session and streams output events.
+// sessionMu is held for the entire turn so concurrent Stream() calls are serialized.
 func (p *ptyProvider) streamInteractive(ctx context.Context, msg string, ch chan<- provider.StreamEvent) error {
-	p.mu.Lock()
+	p.sessionMu.Lock()
+	defer p.sessionMu.Unlock()
 
+	p.mu.Lock()
 	// Start a new PTY session if none is active.
 	if p.ptmx == nil {
 		if err := p.startSession(); err != nil {
@@ -114,7 +118,6 @@ func (p *ptyProvider) streamInteractive(ctx context.Context, msg string, ch chan
 			return fmt.Errorf("pty provider %s: start session: %w", p.adapter.Name(), err)
 		}
 	}
-
 	ptmx := p.ptmx
 	p.mu.Unlock()
 
@@ -194,10 +197,6 @@ func (p *ptyProvider) waitForPrompt(ctx context.Context, ptmx *os.File, deadline
 func (p *ptyProvider) readResponse(ctx context.Context, ptmx *os.File, deadline time.Time, ch chan<- provider.StreamEvent) error {
 	buf := make([]byte, 4096)
 
-	p.mu.Lock()
-	p.output.Reset()
-	p.mu.Unlock()
-
 	for {
 		if ctx.Err() != nil {
 			return ctx.Err()
@@ -226,11 +225,15 @@ func (p *ptyProvider) readResponse(ctx context.Context, ptmx *os.File, deadline 
 		}
 		if err != nil && !isTimeout(err) {
 			if err == io.EOF {
-				// Process exited — clean up session.
+				// Process exited — reap it to avoid zombie, then clean up session.
 				p.mu.Lock()
+				cmd := p.cmd
 				p.ptmx = nil
 				p.cmd = nil
 				p.mu.Unlock()
+				if cmd != nil {
+					_ = cmd.Wait()
+				}
 				ch <- provider.StreamEvent{Type: "done"}
 				return nil
 			}

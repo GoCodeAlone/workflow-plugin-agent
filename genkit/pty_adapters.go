@@ -5,8 +5,9 @@ import (
 	"strings"
 )
 
-// ansiEscape matches ANSI escape sequences for stripping from PTY output.
-var ansiEscape = regexp.MustCompile(`\x1b\[[0-9;]*[a-zA-Z]|\x1b[()][A-Z0-9]|\x1b[^[]`)
+// ansiEscape matches ANSI escape sequences for stripping from PTY output,
+// including CSI sequences, OSC sequences (e.g. terminal title/hyperlinks), and Fe escapes.
+var ansiEscape = regexp.MustCompile(`\x1b\[[0-9;]*[a-zA-Z]|\x1b\][^\x07]*(?:\x07|\x1b\\)|\x1b[()][A-Z0-9]|\x1b[^[]`)
 
 // stripANSI removes ANSI escape codes from s.
 func stripANSI(s string) string {
@@ -150,7 +151,13 @@ func (CodexCLIAdapter) DetectPrompt(output string) bool {
 }
 
 func (CodexCLIAdapter) DetectResponseEnd(output string) bool {
-	return detectResponseEndDefault(output)
+	clean := stripANSI(output)
+	locs := codexPromptRegex.FindAllStringIndex(clean, -1)
+	if len(locs) < 2 {
+		return false
+	}
+	between := clean[locs[0][1]:locs[1][0]]
+	return strings.TrimSpace(between) != ""
 }
 
 func (CodexCLIAdapter) ParseResponse(raw string) string {
