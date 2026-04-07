@@ -83,9 +83,8 @@ func (p *genkitProvider) Chat(ctx context.Context, messages []provider.Message, 
 
 	if len(tools) > 0 {
 		opts = append(opts, ai.WithReturnToolRequests(true))
-		for _, ref := range p.resolveToolRefs(tools) {
-			opts = append(opts, ai.WithTools(ref))
-		}
+		refs := p.resolveToolRefs(tools)
+		opts = append(opts, ai.WithTools(refs...))
 	}
 
 	resp, err := gk.Generate(ctx, p.g, opts...)
@@ -111,9 +110,8 @@ func (p *genkitProvider) Stream(ctx context.Context, messages []provider.Message
 
 	if len(tools) > 0 {
 		opts = append(opts, ai.WithReturnToolRequests(true))
-		for _, ref := range p.resolveToolRefs(tools) {
-			opts = append(opts, ai.WithTools(ref))
-		}
+		refs := p.resolveToolRefs(tools)
+		opts = append(opts, ai.WithTools(refs...))
 	}
 
 	go func() {
