@@ -49,6 +49,9 @@ func (m *mockCLIAdapter) ParseResponse(raw string) string {
 	return stripANSI(raw)
 }
 
+func (m *mockCLIAdapter) StreamingArgs(_ string) []string          { return nil }
+func (m *mockCLIAdapter) ParseStreamEvent(_ string) (string, bool) { return "", false }
+
 // buildMockCLI compiles a simple Go program that simulates a CLI for testing.
 // It accepts --print <msg> for non-interactive mode.
 func buildMockCLI(t *testing.T) string {

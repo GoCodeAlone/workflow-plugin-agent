@@ -1,6 +1,7 @@
 package genkit
 
 import (
+	"encoding/json"
 	"regexp"
 	"strings"
 )
@@ -79,6 +80,46 @@ func (ClaudeCodeAdapter) DetectResponseEnd(output string) bool {
 func (ClaudeCodeAdapter) ParseResponse(raw string) string {
 	return parseResponseDefault(raw)
 }
+
+func (ClaudeCodeAdapter) StreamingArgs(msg string) []string {
+	return []string{"-p", msg, "--output-format", "stream-json", "--verbose"}
+}
+
+func (ClaudeCodeAdapter) ParseStreamEvent(line string) (string, bool) {
+	return parseClaudeStreamEvent(line)
+}
+
+// parseClaudeStreamEvent extracts text content from Claude Code's stream-json format.
+func parseClaudeStreamEvent(line string) (string, bool) {
+	var event struct {
+		Type    string `json:"type"`
+		Message struct {
+			Content []struct {
+				Type string `json:"type"`
+				Text string `json:"text"`
+			} `json:"content"`
+		} `json:"message"`
+	}
+	if err := json.Unmarshal([]byte(line), &event); err != nil {
+		return "", false
+	}
+	if event.Type != "assistant" {
+		return "", false
+	}
+	var text strings.Builder
+	for _, part := range event.Message.Content {
+		if part.Type == "text" {
+			text.WriteString(part.Text)
+		}
+	}
+	return text.String(), text.Len() > 0
+}
+
+// noStreamingArgs is the default for tools without JSON streaming support.
+func noStreamingArgs(_ string) []string { return nil }
+
+// noParseStreamEvent is the default for tools without JSON streaming support.
+func noParseStreamEvent(_ string) (string, bool) { return "", false }
 
 // ── Copilot CLI ───────────────────────────────────────────────────────────────
 
@@ -237,3 +278,38 @@ func (CursorCLIAdapter) ParseResponse(raw string) string {
 	}
 	return strings.Join(lines, "\n")
 }
+
+// StreamingArgs/ParseStreamEvent for adapters without JSON streaming support.
+// They use the streamFallback path (non-interactive exec).
+
+func (CopilotCLIAdapter) StreamingArgs(_ string) []string          { return nil }
+func (CopilotCLIAdapter) ParseStreamEvent(_ string) (string, bool) { return "", false }
+
+func (CodexCLIAdapter) StreamingArgs(_ string) []string          { return nil }
+func (CodexCLIAdapter) ParseStreamEvent(_ string) (string, bool) { return "", false }
+
+func (GeminiCLIAdapter) StreamingArgs(msg string) []string {
+	return []string{"-p", msg, "--output-format", "stream-json"}
+}
+
+func (GeminiCLIAdapter) ParseStreamEvent(line string) (string, bool) {
+	// Gemini CLI uses similar JSON event format — parse for text content.
+	var event struct {
+		Type    string `json:"type"`
+		Content string `json:"content"`
+		Text    string `json:"text"`
+	}
+	if err := json.Unmarshal([]byte(line), &event); err != nil {
+		return "", false
+	}
+	if event.Text != "" {
+		return event.Text, true
+	}
+	if event.Content != "" {
+		return event.Content, true
+	}
+	return "", false
+}
+
+func (CursorCLIAdapter) StreamingArgs(_ string) []string          { return nil }
+func (CursorCLIAdapter) ParseStreamEvent(_ string) (string, bool) { return "", false }

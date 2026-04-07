@@ -1,6 +1,7 @@
 package genkit
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"fmt"
@@ -23,6 +24,10 @@ type CLIAdapter interface {
 	Binary() string
 	// NonInteractiveArgs returns CLI args for single-shot (non-interactive) mode.
 	NonInteractiveArgs(msg string) []string
+	// StreamingArgs returns CLI args for streaming JSON output mode.
+	// Returns nil if the tool doesn't support structured streaming — falls back
+	// to NonInteractiveArgs with line-by-line stdout reading.
+	StreamingArgs(msg string) []string
 	// HealthCheckArgs returns args for a quick health check invocation.
 	HealthCheckArgs() []string
 	// DetectPrompt returns true when the CLI output indicates it is ready for input.
@@ -31,6 +36,10 @@ type CLIAdapter interface {
 	DetectResponseEnd(output string) bool
 	// ParseResponse cleans raw PTY output into plain response text.
 	ParseResponse(raw string) string
+	// ParseStreamEvent parses a line of streaming JSON output into text content.
+	// Returns the text content and true if the line contained assistant text,
+	// or empty string and false if the line should be skipped.
+	ParseStreamEvent(line string) (string, bool)
 }
 
 // ptyProvider implements provider.Provider by driving a CLI tool via PTY.
@@ -87,8 +96,9 @@ func (p *ptyProvider) Chat(ctx context.Context, messages []provider.Message, _ [
 	return &provider.Response{Content: content}, nil
 }
 
-// Stream starts (or reuses) a PTY session and streams response events.
-// The PTY session is kept alive for multi-turn conversation.
+// Stream runs the CLI tool and streams response events.
+// If the adapter supports StreamingArgs (JSON streaming), uses that for reliable
+// structured output. Otherwise falls back to non-interactive exec with line-by-line reading.
 func (p *ptyProvider) Stream(ctx context.Context, messages []provider.Message, _ []provider.ToolDef) (<-chan provider.StreamEvent, error) {
 	msg := flattenMessages(messages)
 
@@ -96,7 +106,17 @@ func (p *ptyProvider) Stream(ctx context.Context, messages []provider.Message, _
 
 	go func() {
 		defer close(ch)
-		if err := p.streamInteractive(ctx, msg, ch); err != nil {
+
+		// Prefer structured JSON streaming if the adapter supports it.
+		if args := p.adapter.StreamingArgs(msg); args != nil {
+			if err := p.streamJSON(ctx, args, ch); err != nil {
+				ch <- provider.StreamEvent{Type: "error", Error: err.Error()}
+			}
+			return
+		}
+
+		// Fallback: run non-interactive and emit result as single event.
+		if err := p.streamFallback(ctx, msg, ch); err != nil {
 			ch <- provider.StreamEvent{Type: "error", Error: err.Error()}
 		}
 	}()
@@ -279,6 +299,73 @@ func flattenMessages(messages []provider.Message) string {
 		}
 	}
 	return sb.String()
+}
+
+// streamJSON runs the CLI with structured JSON streaming args and parses events.
+func (p *ptyProvider) streamJSON(ctx context.Context, args []string, ch chan<- provider.StreamEvent) error {
+	timeout := p.timeout
+	if timeout == 0 {
+		timeout = 5 * time.Minute
+	}
+	ctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+
+	cmd := exec.CommandContext(ctx, p.binPath, args...)
+	if p.workDir != "" {
+		cmd.Dir = p.workDir
+	}
+
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		return fmt.Errorf("stdout pipe: %w", err)
+	}
+	cmd.Stderr = nil // discard stderr
+
+	if err := cmd.Start(); err != nil {
+		return fmt.Errorf("start: %w", err)
+	}
+
+	// Read stdout line-by-line and parse each JSON event.
+	scanner := bufio.NewScanner(stdout)
+	scanner.Buffer(make([]byte, 1024*1024), 1024*1024) // 1MB buffer for large events
+	for scanner.Scan() {
+		line := scanner.Text()
+		if text, ok := p.adapter.ParseStreamEvent(line); ok && text != "" {
+			ch <- provider.StreamEvent{Type: "text", Text: text}
+		}
+	}
+
+	ch <- provider.StreamEvent{Type: "done"}
+	_ = cmd.Wait()
+	return nil
+}
+
+// streamFallback runs the CLI non-interactively and emits the result as a single event.
+func (p *ptyProvider) streamFallback(ctx context.Context, msg string, ch chan<- provider.StreamEvent) error {
+	args := p.adapter.NonInteractiveArgs(msg)
+	timeout := p.timeout
+	if timeout == 0 {
+		timeout = 5 * time.Minute
+	}
+	ctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+
+	cmd := exec.CommandContext(ctx, p.binPath, args...)
+	if p.workDir != "" {
+		cmd.Dir = p.workDir
+	}
+
+	out, err := cmd.Output()
+	if err != nil {
+		return fmt.Errorf("exec: %w", err)
+	}
+
+	content := p.adapter.ParseResponse(string(out))
+	if content != "" {
+		ch <- provider.StreamEvent{Type: "text", Text: content}
+	}
+	ch <- provider.StreamEvent{Type: "done"}
+	return nil
 }
 
 // isTimeout returns true if err is a network/OS timeout error.
