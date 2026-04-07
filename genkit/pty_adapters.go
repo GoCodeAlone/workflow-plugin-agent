@@ -149,6 +149,12 @@ func (CopilotCLIAdapter) DetectPrompt(output string) bool {
 }
 
 func (CopilotCLIAdapter) DetectResponseEnd(output string) bool {
+	// Don't fire while Copilot is still thinking/loading.
+	if strings.Contains(output, "Thinking") || strings.Contains(output, "Queued") ||
+		strings.Contains(output, "◉") || strings.Contains(output, "◎") {
+		return false
+	}
+
 	// Response is complete when we see a ● response line AFTER the user's ❯ input line,
 	// followed by a new ❯ prompt with "Type @". We look for the pattern:
 	//   ❯ <user message>
@@ -306,8 +312,8 @@ func (CursorCLIAdapter) ParseResponse(raw string) string {
 func (CopilotCLIAdapter) StreamingArgs(_ string) []string          { return nil }
 func (CopilotCLIAdapter) ParseStreamEvent(_ string) (string, bool) { return "", false }
 
-// SupportsInteractivePTY returns false — Copilot should use non-interactive exec.
-func (CopilotCLIAdapter) SupportsInteractivePTY() bool { return false }
+// SupportsInteractivePTY returns true — Copilot uses vt10x with screen-diff extraction.
+func (CopilotCLIAdapter) SupportsInteractivePTY() bool { return true }
 
 func (CodexCLIAdapter) SupportsInteractivePTY() bool             { return false }
 func (CodexCLIAdapter) StreamingArgs(_ string) []string          { return nil }

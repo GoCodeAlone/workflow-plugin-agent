@@ -113,18 +113,34 @@ func (p *ptyProvider) Stream(ctx context.Context, messages []provider.Message, _
 		defer close(ch)
 
 		// Resolution order:
-		// 1. Interactive PTY (if adapter supports it) — multi-turn session context
-		// 2. JSON streaming (if adapter provides StreamingArgs) — structured events
+		// 1. JSON streaming (if adapter provides StreamingArgs) — structured, reliable
+		// 2. Interactive PTY (if adapter supports it) — multi-turn session context
 		// 3. Non-interactive exec — simplest fallback
+		//
+		// JSON streaming is preferred over interactive PTY when available because
+		// it provides structured output without screen-parsing complexity.
+		// Interactive PTY is used for adapters that don't support JSON streaming
+		// (e.g. Copilot CLI) but do support interactive terminal sessions.
 
-		if p.adapter.SupportsInteractivePTY() {
-			if err := p.streamInteractive(ctx, msg, ch); err == nil {
+		if args := p.adapter.StreamingArgs(msg); args != nil {
+			if err := p.streamJSON(ctx, args, ch); err == nil {
 				return
 			}
 		}
 
-		if args := p.adapter.StreamingArgs(msg); args != nil {
-			if err := p.streamJSON(ctx, args, ch); err == nil {
+		if p.adapter.SupportsInteractivePTY() {
+			err := p.streamInteractive(ctx, msg, ch)
+			if err == nil {
+				return
+			}
+			// If we have an active PTY session, don't fall through to non-interactive
+			// (that would capture TUI garbage as output). Just report the error.
+			p.mu.Lock()
+			hasSession := p.ptmx != nil
+			p.mu.Unlock()
+			if hasSession {
+				fmt.Fprintf(os.Stderr, "PTY %s: interactive error (session active): %v\n", p.adapter.Name(), err)
+				ch <- provider.StreamEvent{Type: "error", Error: fmt.Sprintf("interactive PTY: %v", err)}
 				return
 			}
 		}
@@ -163,8 +179,14 @@ func (p *ptyProvider) streamInteractive(ctx context.Context, msg string, ch chan
 
 	// Wait for the prompt to appear before sending input.
 	if err := p.waitForPrompt(ctx, ptmx, deadline); err != nil {
+		// Log the screen state for debugging prompt detection.
+		screen := p.vt.String()
+		fmt.Fprintf(os.Stderr, "PTY %s: prompt wait failed, screen:\n---\n%s\n---\n", p.adapter.Name(), screen)
 		return fmt.Errorf("waiting for prompt: %w", err)
 	}
+
+	// Snapshot the screen BEFORE sending — used for diff-based extraction.
+	preScreen := p.vt.String()
 
 	// Send the message character by character (some TUIs need this).
 	for _, ch := range msg {
@@ -178,8 +200,11 @@ func (p *ptyProvider) streamInteractive(ctx context.Context, msg string, ch chan
 		return fmt.Errorf("sending enter: %w", err)
 	}
 
+	// Small delay to let the CLI process the input before reading.
+	time.Sleep(1 * time.Second)
+
 	// Read output and emit stream events until response ends.
-	return p.readResponse(ctx, ptmx, deadline, ch)
+	return p.readResponse(ctx, ptmx, deadline, preScreen, ch)
 }
 
 // startSession forks the CLI process under a PTY with a virtual terminal.
@@ -264,9 +289,11 @@ func (p *ptyProvider) waitForPrompt(ctx context.Context, ptmx *os.File, deadline
 // readResponse polls the virtual terminal screen after sending a message.
 // Emits text diffs as stream events until the adapter detects the response is done
 // (typically when a new prompt appears after the response text).
-func (p *ptyProvider) readResponse(ctx context.Context, ptmx *os.File, deadline time.Time, ch chan<- provider.StreamEvent) error {
-	// Snapshot the screen before the response to diff against.
+// preScreen is the screen snapshot taken before the message was sent, used for
+// diff-based extraction so only new content is collected.
+func (p *ptyProvider) readResponse(ctx context.Context, ptmx *os.File, deadline time.Time, preScreen string, ch chan<- provider.StreamEvent) error {
 	lastScreen := p.vt.String()
+	preLines := screenLines(preScreen)
 	var lastEmitted string
 
 	for {
@@ -274,7 +301,8 @@ func (p *ptyProvider) readResponse(ctx context.Context, ptmx *os.File, deadline 
 			return ctx.Err()
 		}
 		if time.Now().After(deadline) {
-			// On timeout, emit whatever we have and return done.
+			screen := p.vt.String()
+			fmt.Fprintf(os.Stderr, "PTY %s: readResponse timeout, screen:\n---\n%s\n---\n", p.adapter.Name(), screen)
 			ch <- provider.StreamEvent{Type: "done"}
 			return nil
 		}
@@ -283,8 +311,15 @@ func (p *ptyProvider) readResponse(ctx context.Context, ptmx *os.File, deadline 
 		if screen != lastScreen {
 			lastScreen = screen
 
-			// Extract response text from screen (content between user message and next prompt).
-			responseText := p.extractResponse(screen)
+			// Don't extract while thinking/loading indicators are visible.
+			if strings.Contains(screen, "◉") || strings.Contains(screen, "◎") ||
+				strings.Contains(screen, "Thinking") {
+				time.Sleep(500 * time.Millisecond)
+				continue
+			}
+
+			// Extract response using both adapter-specific logic and screen diff.
+			responseText := p.extractResponseDiff(screen, preLines)
 
 			// Only emit new text that hasn't been emitted yet.
 			if responseText != lastEmitted && len(responseText) > len(lastEmitted) {
@@ -386,6 +421,68 @@ func (p *ptyProvider) extractResponse(screen string) string {
 	}
 
 	return strings.Join(response, "\n")
+}
+
+// screenLines splits a screen snapshot into trimmed non-empty line set for diffing.
+func screenLines(screen string) map[string]bool {
+	m := make(map[string]bool)
+	for _, line := range strings.Split(screen, "\n") {
+		trimmed := strings.TrimRight(line, " \t")
+		if trimmed != "" {
+			m[trimmed] = true
+		}
+	}
+	return m
+}
+
+// extractResponseDiff extracts the assistant response using both adapter-specific
+// parsing and screen-diff logic. Lines that existed in the pre-message screen
+// are excluded, ensuring only new content is captured.
+func (p *ptyProvider) extractResponseDiff(screen string, preLines map[string]bool) string {
+	// First try the adapter-specific extraction (handles ❯ / ● patterns).
+	adapterResult := p.extractResponse(screen)
+	if adapterResult != "" {
+		return adapterResult
+	}
+
+	// Fallback: pure diff — collect lines that are new since pre-snapshot.
+	var newLines []string
+	for _, line := range strings.Split(screen, "\n") {
+		trimmed := strings.TrimRight(line, " \t")
+		if trimmed == "" {
+			continue
+		}
+		if preLines[trimmed] {
+			continue
+		}
+		clean := strings.TrimSpace(trimmed)
+		if clean == "" {
+			continue
+		}
+		// Skip UI chrome
+		if strings.HasPrefix(clean, "╭") || strings.HasPrefix(clean, "│") ||
+			strings.HasPrefix(clean, "╰") || strings.HasPrefix(clean, "─") {
+			continue
+		}
+		// Skip prompt lines
+		if strings.Contains(clean, "❯") || strings.Contains(clean, "Type @") {
+			continue
+		}
+		// Skip thinking/loading indicators
+		if strings.Contains(clean, "Thinking") || strings.Contains(clean, "Queued") ||
+			strings.Contains(clean, "◉") || strings.Contains(clean, "◎") ||
+			strings.Contains(clean, "[pending]") || strings.Contains(clean, "Esc to cancel") {
+			continue
+		}
+		// Skip status bar / mode line
+		if strings.Contains(clean, "shift+tab") || strings.Contains(clean, "ctrl+q") ||
+			strings.Contains(clean, "Remaining reqs") || strings.Contains(clean, "switch mode") {
+			continue
+		}
+		newLines = append(newLines, clean)
+	}
+
+	return strings.Join(newLines, "\n")
 }
 
 // handleSessionEnd cleans up when the CLI process exits.
