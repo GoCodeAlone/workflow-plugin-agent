@@ -121,7 +121,7 @@ func NewOllamaProvider(ctx context.Context, model, serverAddress string, maxToke
 	if model == "" {
 		model = defaultOllamaModel
 	}
-	p := &ollamaPlugin.Ollama{ServerAddress: serverAddress}
+	p := &ollamaPlugin.Ollama{ServerAddress: serverAddress, Timeout: 300} // 5 min — model loading can be slow
 	g := initGenkitWithPlugin(ctx, gk.WithPlugins(p))
 	return &genkitProvider{
 		g:         g,
