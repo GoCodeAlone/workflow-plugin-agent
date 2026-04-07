@@ -5,7 +5,6 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"io"
 	"os"
 	"os/exec"
 	"strings"
@@ -14,6 +13,7 @@ import (
 
 	"github.com/GoCodeAlone/workflow-plugin-agent/provider"
 	"github.com/creack/pty"
+	"github.com/hinshun/vt10x"
 )
 
 // CLIAdapter defines per-tool behavior for driving a CLI via PTY.
@@ -51,11 +51,12 @@ type ptyProvider struct {
 	timeout  time.Duration
 
 	// PTY session state (kept alive for multi-turn streaming)
-	mu        sync.Mutex // guards ptmx, cmd, output field pointers
-	sessionMu sync.Mutex // serializes full turn lifecycle (prompt→send→read)
-	ptmx      *os.File   // PTY master — nil when no active session
-	cmd       *exec.Cmd  // running CLI process
-	output    bytes.Buffer
+	mu        sync.Mutex     // guards ptmx, cmd, vt field pointers
+	sessionMu sync.Mutex     // serializes full turn lifecycle (prompt→send→read)
+	ptmx      *os.File       // PTY master — nil when no active session
+	cmd       *exec.Cmd      // running CLI process
+	vt        vt10x.Terminal // virtual terminal screen buffer
+	output    bytes.Buffer   // raw output accumulator (for fallback parsing)
 }
 
 // Name implements provider.Provider.
@@ -153,43 +154,66 @@ func (p *ptyProvider) streamInteractive(ctx context.Context, msg string, ch chan
 		return fmt.Errorf("waiting for prompt: %w", err)
 	}
 
-	// Send the message.
-	if _, err := fmt.Fprintf(ptmx, "%s\n", msg); err != nil {
-		return fmt.Errorf("writing to PTY: %w", err)
+	// Send the message character by character (some TUIs need this).
+	for _, ch := range msg {
+		if _, err := ptmx.Write([]byte(string(ch))); err != nil {
+			return fmt.Errorf("writing to PTY: %w", err)
+		}
+		time.Sleep(10 * time.Millisecond)
 	}
-
-	// Reset output accumulator for this turn.
-	p.mu.Lock()
-	p.output.Reset()
-	p.mu.Unlock()
+	// Submit with carriage return (Enter key in terminal).
+	if _, err := ptmx.Write([]byte{'\r'}); err != nil {
+		return fmt.Errorf("sending enter: %w", err)
+	}
 
 	// Read output and emit stream events until response ends.
 	return p.readResponse(ctx, ptmx, deadline, ch)
 }
 
-// startSession forks the CLI process under a PTY. Caller must hold p.mu.
+// startSession forks the CLI process under a PTY with a virtual terminal.
+// Caller must hold p.mu.
 func (p *ptyProvider) startSession() error {
 	cmd := exec.Command(p.binPath)
+	cmd.Env = append(os.Environ(), "TERM=xterm-256color")
 	if p.workDir != "" {
 		cmd.Dir = p.workDir
 	}
 
-	ptmx, err := pty.StartWithSize(cmd, &pty.Winsize{Rows: 40, Cols: 120})
+	ptmx, err := pty.StartWithSize(cmd, &pty.Winsize{Rows: 30, Cols: 100})
 	if err != nil {
 		return fmt.Errorf("pty.StartWithSize: %w", err)
 	}
 
+	// Virtual terminal processes escape sequences and maintains screen buffer.
+	vt := vt10x.New(vt10x.WithSize(100, 30))
+
+	// Background goroutine feeds PTY output to the virtual terminal.
+	go func() {
+		buf := make([]byte, 4096)
+		for {
+			n, readErr := ptmx.Read(buf)
+			if n > 0 {
+				vt.Write(buf[:n])
+				p.mu.Lock()
+				p.output.Write(buf[:n])
+				p.mu.Unlock()
+			}
+			if readErr != nil {
+				return
+			}
+		}
+	}()
+
 	p.cmd = cmd
 	p.ptmx = ptmx
+	p.vt = vt
 	p.output.Reset()
 	return nil
 }
 
-// waitForPrompt reads PTY output until the adapter's DetectPrompt returns true.
+// waitForPrompt polls the virtual terminal screen until the adapter's DetectPrompt returns true.
+// Also auto-handles trust prompts by pressing Enter.
 func (p *ptyProvider) waitForPrompt(ctx context.Context, ptmx *os.File, deadline time.Time) error {
-	buf := make([]byte, 4096)
-	var accumulated strings.Builder
-
 	for {
 		if ctx.Err() != nil {
 			return ctx.Err()
@@ -198,67 +222,138 @@ func (p *ptyProvider) waitForPrompt(ctx context.Context, ptmx *os.File, deadline
 			return fmt.Errorf("timeout waiting for CLI prompt")
 		}
 
-		_ = ptmx.SetReadDeadline(time.Now().Add(100 * time.Millisecond))
-		n, err := ptmx.Read(buf)
-		if n > 0 {
-			chunk := string(buf[:n])
-			accumulated.WriteString(chunk)
-			if p.adapter.DetectPrompt(accumulated.String()) {
-				return nil
-			}
+		screen := p.vt.String()
+
+		// Auto-handle trust prompts (e.g., "trust this folder" in Claude Code)
+		if strings.Contains(screen, "trust") && strings.Contains(screen, "Yes") {
+			ptmx.Write([]byte{'\r'})
+			time.Sleep(1 * time.Second)
+			continue
 		}
-		if err != nil && !isTimeout(err) {
-			return fmt.Errorf("reading PTY: %w", err)
+
+		if p.adapter.DetectPrompt(screen) {
+			return nil
 		}
+
+		time.Sleep(300 * time.Millisecond)
 	}
 }
 
-// readResponse reads PTY output after sending a message, emitting stream events.
+// readResponse polls the virtual terminal screen after sending a message.
+// Emits text diffs as stream events until the adapter detects the response is done
+// (typically when a new prompt appears after the response text).
 func (p *ptyProvider) readResponse(ctx context.Context, ptmx *os.File, deadline time.Time, ch chan<- provider.StreamEvent) error {
-	buf := make([]byte, 4096)
+	// Snapshot the screen before the response to diff against.
+	lastScreen := p.vt.String()
+	var lastEmitted string
 
 	for {
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
 		if time.Now().After(deadline) {
-			return fmt.Errorf("timeout waiting for response")
+			// On timeout, emit whatever we have and return done.
+			ch <- provider.StreamEvent{Type: "done"}
+			return nil
 		}
 
-		_ = ptmx.SetReadDeadline(time.Now().Add(100 * time.Millisecond))
-		n, err := ptmx.Read(buf)
-		if n > 0 {
-			chunk := string(buf[:n])
+		screen := p.vt.String()
+		if screen != lastScreen {
+			lastScreen = screen
 
-			p.mu.Lock()
-			p.output.WriteString(chunk)
-			accumulated := p.output.String()
-			p.mu.Unlock()
+			// Extract response text from screen (content between user message and next prompt).
+			responseText := p.extractResponse(screen)
 
-			// Emit text chunk (tool approval prompts pass through as text).
-			ch <- provider.StreamEvent{Type: "text", Text: chunk}
-
-			if p.adapter.DetectResponseEnd(accumulated) {
-				ch <- provider.StreamEvent{Type: "done"}
-				return nil
-			}
-		}
-		if err != nil && !isTimeout(err) {
-			if err == io.EOF {
-				// Process exited — reap it to avoid zombie, then clean up session.
-				p.mu.Lock()
-				cmd := p.cmd
-				p.ptmx = nil
-				p.cmd = nil
-				p.mu.Unlock()
-				if cmd != nil {
-					_ = cmd.Wait()
+			// Only emit new text that hasn't been emitted yet.
+			if responseText != lastEmitted && len(responseText) > len(lastEmitted) {
+				newText := responseText[len(lastEmitted):]
+				if newText != "" {
+					ch <- provider.StreamEvent{Type: "text", Text: newText}
+					lastEmitted = responseText
 				}
+			}
+
+			// Check if the response is complete (new prompt appeared).
+			if p.adapter.DetectResponseEnd(screen) {
 				ch <- provider.StreamEvent{Type: "done"}
 				return nil
 			}
-			return fmt.Errorf("reading PTY response: %w", err)
 		}
+		time.Sleep(200 * time.Millisecond)
+	}
+}
+
+// extractResponse extracts the assistant's response text from the virtual terminal screen.
+// It looks for text between the user's message and the next prompt indicator.
+func (p *ptyProvider) extractResponse(screen string) string {
+	lines := strings.Split(screen, "\n")
+	var response []string
+	inResponse := false
+
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+
+		// Skip empty lines and UI chrome
+		if trimmed == "" {
+			if inResponse {
+				response = append(response, "")
+			}
+			continue
+		}
+
+		// Skip horizontal rules (box-drawing chars)
+		if len(trimmed) > 5 && strings.Count(trimmed, "─") > len(trimmed)/2 {
+			if inResponse {
+				// A horizontal rule after response content likely means end of response area
+				continue
+			}
+			continue
+		}
+
+		// Skip box-drawing and UI elements
+		if strings.HasPrefix(trimmed, "╭") || strings.HasPrefix(trimmed, "│") ||
+		   strings.HasPrefix(trimmed, "╰") || strings.HasPrefix(trimmed, "?") ||
+		   strings.Contains(trimmed, "Update available") ||
+		   strings.Contains(trimmed, "shortcuts") ||
+		   strings.Contains(trimmed, "/effort") ||
+		   strings.Contains(trimmed, "MCP server") {
+			continue
+		}
+
+		// The greyed ❯ marks a prior user input — response starts after this line
+		if strings.Contains(line, "❯") && !inResponse {
+			inResponse = true
+			continue
+		}
+
+		// A new bright ❯ with empty or different content = new prompt = end
+		if inResponse && strings.Contains(line, "❯") {
+			break
+		}
+
+		if inResponse {
+			response = append(response, trimmed)
+		}
+	}
+
+	// Trim trailing empty lines
+	for len(response) > 0 && response[len(response)-1] == "" {
+		response = response[:len(response)-1]
+	}
+
+	return strings.Join(response, "\n")
+}
+
+// handleSessionEnd cleans up when the CLI process exits.
+func (p *ptyProvider) handleSessionEnd() {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	cmd := p.cmd
+	p.ptmx = nil
+	p.cmd = nil
+	p.vt = nil
+	if cmd != nil {
+		_ = cmd.Wait()
 	}
 }
 
