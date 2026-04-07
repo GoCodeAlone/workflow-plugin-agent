@@ -73,8 +73,10 @@ func (p *ptyProvider) AuthModeInfo() provider.AuthModeInfo {
 	return p.authInfo
 }
 
-// Chat runs the CLI in single-shot (non-interactive) mode and returns the response.
-// This is stateless — no PTY is kept alive.
+// Chat runs the CLI in single-shot exec mode and returns the response.
+// Always stateless — each call is independent with no session context.
+// For multi-turn conversations, callers must use Stream() with an adapter
+// that supports interactive PTY.
 func (p *ptyProvider) Chat(ctx context.Context, messages []provider.Message, _ []provider.ToolDef) (*provider.Response, error) {
 	// Flatten messages into a single prompt for CLIs that take a single -p argument.
 	msg := flattenMessages(messages)
@@ -101,9 +103,20 @@ func (p *ptyProvider) Chat(ctx context.Context, messages []provider.Message, _ [
 	return &provider.Response{Content: content}, nil
 }
 
-// Stream uses the interactive PTY (vt10x) path to maintain session context
-// across multiple calls. The PTY session is kept alive for multi-turn conversation.
-// Falls back to JSON streaming or non-interactive exec if the interactive session fails.
+// Stream operates in one of two distinct modes based on the adapter:
+//
+// INTERACTIVE MODE (SupportsInteractivePTY == true):
+//
+//	Uses vt10x PTY to maintain a persistent session. Multi-turn context is
+//	preserved across calls. If the interactive session fails, it returns an
+//	error — it does NOT silently fall back to exec mode, because that would
+//	lose session context without the caller knowing.
+//
+// EXEC MODE (SupportsInteractivePTY == false):
+//
+//	Uses JSON streaming (StreamingArgs) or raw stdout (NonInteractiveArgs).
+//	Each call is independent — no multi-turn session context. Suitable for
+//	single-shot queries only.
 func (p *ptyProvider) Stream(ctx context.Context, messages []provider.Message, _ []provider.ToolDef) (<-chan provider.StreamEvent, error) {
 	msg := flattenMessages(messages)
 
@@ -112,35 +125,26 @@ func (p *ptyProvider) Stream(ctx context.Context, messages []provider.Message, _
 	go func() {
 		defer close(ch)
 
-		// Resolution order:
-		// 1. JSON streaming (if adapter provides StreamingArgs) — structured, reliable
-		// 2. Interactive PTY (if adapter supports it) — multi-turn session context
-		// 3. Non-interactive exec — simplest fallback
+		// Two distinct modes — NO silent fallback between them:
 		//
-		// JSON streaming is preferred over interactive PTY when available because
-		// it provides structured output without screen-parsing complexity.
-		// Interactive PTY is used for adapters that don't support JSON streaming
-		// (e.g. Copilot CLI) but do support interactive terminal sessions.
-
-		if args := p.adapter.StreamingArgs(msg); args != nil {
-			if err := p.streamJSON(ctx, args, ch); err == nil {
-				return
-			}
-		}
+		// INTERACTIVE (SupportsInteractivePTY): Multi-turn session via vt10x PTY.
+		//   Maintains conversation context across calls. Used by Claude Code, Copilot.
+		//   If interactive fails, it errors — does NOT silently degrade to exec mode.
+		//
+		// EXEC (everything else): Single-shot execution. No session persistence.
+		//   Uses JSON streaming (StreamingArgs) or raw stdout (NonInteractiveArgs).
+		//   Each call is independent — no multi-turn context.
 
 		if p.adapter.SupportsInteractivePTY() {
-			err := p.streamInteractive(ctx, msg, ch)
-			if err == nil {
-				return
-			}
-			// If we have an active PTY session, don't fall through to non-interactive
-			// (that would capture TUI garbage as output). Just report the error.
-			p.mu.Lock()
-			hasSession := p.ptmx != nil
-			p.mu.Unlock()
-			if hasSession {
-				fmt.Fprintf(os.Stderr, "PTY %s: interactive error (session active): %v\n", p.adapter.Name(), err)
+			if err := p.streamInteractive(ctx, msg, ch); err != nil {
 				ch <- provider.StreamEvent{Type: "error", Error: fmt.Sprintf("interactive PTY: %v", err)}
+			}
+			return
+		}
+
+		// Exec mode: JSON streaming if available, otherwise raw stdout.
+		if args := p.adapter.StreamingArgs(msg); args != nil {
+			if err := p.streamJSON(ctx, args, ch); err == nil {
 				return
 			}
 		}
@@ -312,8 +316,9 @@ func (p *ptyProvider) readResponse(ctx context.Context, ptmx *os.File, deadline 
 			lastScreen = screen
 
 			// Don't extract while thinking/loading indicators are visible.
-			if strings.Contains(screen, "◉") || strings.Contains(screen, "◎") ||
-				strings.Contains(screen, "Thinking") {
+			// Claude Code uses spinner symbols: ✢ ✻ ✽ ⏺ ◐ followed by text + …
+			// Copilot uses: ◉/◎ Thinking (Esc to cancel)
+			if isThinking(screen) {
 				time.Sleep(500 * time.Millisecond)
 				continue
 			}
@@ -423,6 +428,37 @@ func (p *ptyProvider) extractResponse(screen string) string {
 	return strings.Join(response, "\n")
 }
 
+// isThinking returns true if the screen shows thinking/loading indicators
+// from either Claude Code or Copilot.
+func isThinking(screen string) bool {
+	// Copilot thinking
+	if strings.Contains(screen, "◉") || strings.Contains(screen, "◎") ||
+		strings.Contains(screen, "Thinking") {
+		return true
+	}
+	// Claude Code thinking: any line that ends with "…" (ellipsis) and is short
+	// (thinking indicators like "✢ Percolating…", "· Moseying…", "✶ Scampering…").
+	// Also ⏺ alone on a line (response placeholder before text fills in).
+	for _, line := range strings.Split(screen, "\n") {
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" {
+			continue
+		}
+		// Bare ⏺ (response marker without content = still loading)
+		if trimmed == "⏺" {
+			return true
+		}
+		// Pattern: short line containing "…" with few words
+		if strings.Contains(trimmed, "…") && len(trimmed) < 60 {
+			words := strings.Fields(trimmed)
+			if len(words) <= 3 {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 // screenLines splits a screen snapshot into trimmed non-empty line set for diffing.
 func screenLines(screen string) map[string]bool {
 	m := make(map[string]bool)
@@ -435,14 +471,36 @@ func screenLines(screen string) map[string]bool {
 	return m
 }
 
-// extractResponseDiff extracts the assistant response using both adapter-specific
-// parsing and screen-diff logic. Lines that existed in the pre-message screen
-// are excluded, ensuring only new content is captured.
+// extractResponseDiff extracts the assistant response using screen-diff logic.
+// Lines that existed in the pre-message screen are excluded, ensuring only
+// new content from the current turn is captured.
 func (p *ptyProvider) extractResponseDiff(screen string, preLines map[string]bool) string {
-	// First try the adapter-specific extraction (handles ❯ / ● patterns).
+	// Try adapter-specific extraction first, then filter against pre-screen.
 	adapterResult := p.extractResponse(screen)
 	if adapterResult != "" {
-		return adapterResult
+		// Filter out lines that existed before this turn.
+		var filtered []string
+		for _, line := range strings.Split(adapterResult, "\n") {
+			trimmed := strings.TrimRight(line, " \t")
+			if trimmed == "" {
+				filtered = append(filtered, "")
+				continue
+			}
+			if preLines[trimmed] || preLines[strings.TrimSpace(trimmed)] {
+				continue
+			}
+			filtered = append(filtered, line)
+		}
+		// Trim leading/trailing empty lines.
+		for len(filtered) > 0 && filtered[0] == "" {
+			filtered = filtered[1:]
+		}
+		for len(filtered) > 0 && filtered[len(filtered)-1] == "" {
+			filtered = filtered[:len(filtered)-1]
+		}
+		if result := strings.Join(filtered, "\n"); result != "" {
+			return result
+		}
 	}
 
 	// Fallback: pure diff — collect lines that are new since pre-snapshot.
@@ -474,9 +532,11 @@ func (p *ptyProvider) extractResponseDiff(screen string, preLines map[string]boo
 			strings.Contains(clean, "[pending]") || strings.Contains(clean, "Esc to cancel") {
 			continue
 		}
-		// Skip status bar / mode line
+		// Skip status bar / mode line / UI chrome
 		if strings.Contains(clean, "shift+tab") || strings.Contains(clean, "ctrl+q") ||
-			strings.Contains(clean, "Remaining reqs") || strings.Contains(clean, "switch mode") {
+			strings.Contains(clean, "Remaining reqs") || strings.Contains(clean, "switch mode") ||
+			strings.Contains(clean, "esc to interrupt") || strings.Contains(clean, "/effort") ||
+			strings.Contains(clean, "ctrl+o to expand") {
 			continue
 		}
 		newLines = append(newLines, clean)

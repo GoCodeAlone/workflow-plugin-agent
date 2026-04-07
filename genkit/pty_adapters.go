@@ -15,8 +15,9 @@ func stripANSI(s string) string {
 	return ansiEscape.ReplaceAllString(s, "")
 }
 
-// promptRegex matches a line starting with ❯ or > (prompt indicators).
-var promptRegex = regexp.MustCompile(`(?m)^[❯>]\s`)
+// promptRegex matches a line containing ❯ or > prompt indicators (allowing leading whitespace).
+// Uses [\s\x{00a0}] because Claude Code renders non-breaking space (\u00a0) after ❯.
+var promptRegex = regexp.MustCompile(`(?m)^\s*[❯>][\s\x{00a0}]`)
 
 // detectPromptDefault returns true when a standard prompt character appears.
 func detectPromptDefault(output string) bool {
@@ -74,6 +75,10 @@ func (ClaudeCodeAdapter) DetectPrompt(output string) bool {
 }
 
 func (ClaudeCodeAdapter) DetectResponseEnd(output string) bool {
+	// Don't fire while Claude Code is still thinking.
+	if isThinking(output) {
+		return false
+	}
 	return detectResponseEndDefault(output)
 }
 
