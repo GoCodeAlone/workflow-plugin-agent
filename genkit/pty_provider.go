@@ -97,9 +97,9 @@ func (p *ptyProvider) Chat(ctx context.Context, messages []provider.Message, _ [
 	return &provider.Response{Content: content}, nil
 }
 
-// Stream runs the CLI tool and streams response events.
-// If the adapter supports StreamingArgs (JSON streaming), uses that for reliable
-// structured output. Otherwise falls back to non-interactive exec with line-by-line reading.
+// Stream uses the interactive PTY (vt10x) path to maintain session context
+// across multiple calls. The PTY session is kept alive for multi-turn conversation.
+// Falls back to JSON streaming or non-interactive exec if the interactive session fails.
 func (p *ptyProvider) Stream(ctx context.Context, messages []provider.Message, _ []provider.ToolDef) (<-chan provider.StreamEvent, error) {
 	msg := flattenMessages(messages)
 
@@ -108,17 +108,18 @@ func (p *ptyProvider) Stream(ctx context.Context, messages []provider.Message, _
 	go func() {
 		defer close(ch)
 
-		// Prefer structured JSON streaming if the adapter supports it.
-		if args := p.adapter.StreamingArgs(msg); args != nil {
-			if err := p.streamJSON(ctx, args, ch); err != nil {
+		// Primary: interactive PTY session via vt10x virtual terminal.
+		if err := p.streamInteractive(ctx, msg, ch); err != nil {
+			// If interactive fails, try JSON streaming as fallback.
+			if args := p.adapter.StreamingArgs(msg); args != nil {
+				if jsonErr := p.streamJSON(ctx, args, ch); jsonErr == nil {
+					return
+				}
+			}
+			// Last resort: non-interactive exec.
+			if fallbackErr := p.streamFallback(ctx, msg, ch); fallbackErr != nil {
 				ch <- provider.StreamEvent{Type: "error", Error: err.Error()}
 			}
-			return
-		}
-
-		// Fallback: run non-interactive and emit result as single event.
-		if err := p.streamFallback(ctx, msg, ch); err != nil {
-			ch <- provider.StreamEvent{Type: "error", Error: err.Error()}
 		}
 	}()
 
