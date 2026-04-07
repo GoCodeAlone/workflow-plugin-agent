@@ -87,6 +87,9 @@ func (ClaudeCodeAdapter) ParseResponse(raw string) string {
 }
 
 func (ClaudeCodeAdapter) SupportsInteractivePTY() bool { return true }
+func (ClaudeCodeAdapter) InteractiveArgs() []string {
+	return []string{"--permission-mode", "acceptEdits"}
+}
 
 func (ClaudeCodeAdapter) StreamingArgs(msg string) []string {
 	return []string{"-p", msg, "--output-format", "stream-json", "--verbose"}
@@ -319,12 +322,17 @@ func (CopilotCLIAdapter) ParseStreamEvent(_ string) (string, bool) { return "", 
 
 // SupportsInteractivePTY returns true — Copilot uses vt10x with screen-diff extraction.
 func (CopilotCLIAdapter) SupportsInteractivePTY() bool { return true }
+func (CopilotCLIAdapter) InteractiveArgs() []string {
+	return []string{"--allow-all"}
+}
 
 func (CodexCLIAdapter) SupportsInteractivePTY() bool             { return false }
+func (CodexCLIAdapter) InteractiveArgs() []string                { return nil }
 func (CodexCLIAdapter) StreamingArgs(_ string) []string          { return nil }
 func (CodexCLIAdapter) ParseStreamEvent(_ string) (string, bool) { return "", false }
 
 func (GeminiCLIAdapter) SupportsInteractivePTY() bool { return false }
+func (GeminiCLIAdapter) InteractiveArgs() []string     { return nil }
 
 func (GeminiCLIAdapter) StreamingArgs(msg string) []string {
 	return []string{"-p", msg, "--output-format", "stream-json"}
@@ -350,5 +358,6 @@ func (GeminiCLIAdapter) ParseStreamEvent(line string) (string, bool) {
 }
 
 func (CursorCLIAdapter) SupportsInteractivePTY() bool             { return false }
+func (CursorCLIAdapter) InteractiveArgs() []string                { return nil }
 func (CursorCLIAdapter) StreamingArgs(_ string) []string          { return nil }
 func (CursorCLIAdapter) ParseStreamEvent(_ string) (string, bool) { return "", false }

@@ -44,6 +44,10 @@ type CLIAdapter interface {
 	// compatible with vt10x screen reading. Tools that return false skip the
 	// interactive path and go straight to JSON streaming or non-interactive exec.
 	SupportsInteractivePTY() bool
+	// InteractiveArgs returns CLI args used when launching the interactive PTY session.
+	// For example, Claude Code returns ["--permission-mode", "acceptEdits"] to
+	// auto-approve file edits. Returns nil for no extra args.
+	InteractiveArgs() []string
 }
 
 // ptyProvider implements provider.Provider by driving a CLI tool via PTY.
@@ -214,7 +218,8 @@ func (p *ptyProvider) streamInteractive(ctx context.Context, msg string, ch chan
 // startSession forks the CLI process under a PTY with a virtual terminal.
 // Caller must hold p.mu.
 func (p *ptyProvider) startSession() error {
-	cmd := exec.Command(p.binPath)
+	args := p.adapter.InteractiveArgs()
+	cmd := exec.Command(p.binPath, args...)
 	cmd.Env = append(os.Environ(), "TERM=xterm-256color")
 	if p.workDir != "" {
 		cmd.Dir = p.workDir
