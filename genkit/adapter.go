@@ -12,11 +12,12 @@ import (
 
 // genkitProvider adapts a Genkit model to provider.Provider.
 type genkitProvider struct {
-	g         *gk.Genkit
-	modelName string // "provider/model" format e.g. "anthropic/claude-sonnet-4-6"
-	name      string
-	authInfo  provider.AuthModeInfo
-	maxTokens int // 0 means use model default
+	g              *gk.Genkit
+	modelName      string // "provider/model" format e.g. "anthropic/claude-sonnet-4-6"
+	name           string
+	authInfo       provider.AuthModeInfo
+	maxTokens      int  // 0 means use model default
+	skipCommonCfg  bool // true for providers that reject GenerationCommonConfig (e.g. Ollama)
 
 	mu           sync.Mutex
 	definedTools map[string]bool // tracks which tool names are registered
@@ -61,11 +62,12 @@ func (p *genkitProvider) resolveToolRefs(tools []provider.ToolDef) []ai.ToolRef 
 }
 
 // generationConfig returns a WithConfig option when maxTokens is configured.
+// Returns nil for providers that don't support GenerationCommonConfig (e.g. Ollama).
 func (p *genkitProvider) generationConfig() ai.GenerateOption {
-	if p.maxTokens > 0 {
-		return ai.WithConfig(&ai.GenerationCommonConfig{MaxOutputTokens: p.maxTokens})
+	if p.skipCommonCfg || p.maxTokens <= 0 {
+		return nil
 	}
-	return nil
+	return ai.WithConfig(&ai.GenerationCommonConfig{MaxOutputTokens: p.maxTokens})
 }
 
 // Chat sends a non-streaming request and returns the complete response.

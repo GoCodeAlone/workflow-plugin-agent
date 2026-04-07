@@ -124,10 +124,11 @@ func NewOllamaProvider(ctx context.Context, model, serverAddress string, maxToke
 	p := &ollamaPlugin.Ollama{ServerAddress: serverAddress, Timeout: 300} // 5 min — model loading can be slow
 	g := initGenkitWithPlugin(ctx, gk.WithPlugins(p))
 	return &genkitProvider{
-		g:         g,
-		modelName: "ollama/" + model,
-		name:      "ollama",
-		maxTokens: maxTokens,
+		g:             g,
+		modelName:     "ollama/" + model,
+		name:          "ollama",
+		maxTokens:     maxTokens,
+		skipCommonCfg: true, // Ollama rejects GenerationCommonConfig (maxOutputTokens)
 		authInfo: provider.AuthModeInfo{
 			Mode:        "none",
 			DisplayName: "Ollama (local)",
