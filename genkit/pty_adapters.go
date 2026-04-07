@@ -81,6 +81,8 @@ func (ClaudeCodeAdapter) ParseResponse(raw string) string {
 	return parseResponseDefault(raw)
 }
 
+func (ClaudeCodeAdapter) SupportsInteractivePTY() bool { return true }
+
 func (ClaudeCodeAdapter) StreamingArgs(msg string) []string {
 	return []string{"-p", msg, "--output-format", "stream-json", "--verbose"}
 }
@@ -299,11 +301,19 @@ func (CursorCLIAdapter) ParseResponse(raw string) string {
 // StreamingArgs/ParseStreamEvent for adapters without JSON streaming support.
 // They use the streamFallback path (non-interactive exec).
 
+// Copilot uses non-interactive fallback for now — interactive PTY response
+// extraction needs refinement for Copilot's specific screen layout.
 func (CopilotCLIAdapter) StreamingArgs(_ string) []string          { return nil }
 func (CopilotCLIAdapter) ParseStreamEvent(_ string) (string, bool) { return "", false }
 
+// SupportsInteractivePTY returns false — Copilot should use non-interactive exec.
+func (CopilotCLIAdapter) SupportsInteractivePTY() bool { return false }
+
+func (CodexCLIAdapter) SupportsInteractivePTY() bool             { return false }
 func (CodexCLIAdapter) StreamingArgs(_ string) []string          { return nil }
 func (CodexCLIAdapter) ParseStreamEvent(_ string) (string, bool) { return "", false }
+
+func (GeminiCLIAdapter) SupportsInteractivePTY() bool { return false }
 
 func (GeminiCLIAdapter) StreamingArgs(msg string) []string {
 	return []string{"-p", msg, "--output-format", "stream-json"}
@@ -328,5 +338,6 @@ func (GeminiCLIAdapter) ParseStreamEvent(line string) (string, bool) {
 	return "", false
 }
 
+func (CursorCLIAdapter) SupportsInteractivePTY() bool             { return false }
 func (CursorCLIAdapter) StreamingArgs(_ string) []string          { return nil }
 func (CursorCLIAdapter) ParseStreamEvent(_ string) (string, bool) { return "", false }

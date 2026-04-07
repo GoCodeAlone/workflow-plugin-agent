@@ -40,6 +40,10 @@ type CLIAdapter interface {
 	// Returns the text content and true if the line contained assistant text,
 	// or empty string and false if the line should be skipped.
 	ParseStreamEvent(line string) (string, bool)
+	// SupportsInteractivePTY returns true if the tool's interactive TUI is
+	// compatible with vt10x screen reading. Tools that return false skip the
+	// interactive path and go straight to JSON streaming or non-interactive exec.
+	SupportsInteractivePTY() bool
 }
 
 // ptyProvider implements provider.Provider by driving a CLI tool via PTY.
@@ -108,18 +112,25 @@ func (p *ptyProvider) Stream(ctx context.Context, messages []provider.Message, _
 	go func() {
 		defer close(ch)
 
-		// Primary: interactive PTY session via vt10x virtual terminal.
-		if err := p.streamInteractive(ctx, msg, ch); err != nil {
-			// If interactive fails, try JSON streaming as fallback.
-			if args := p.adapter.StreamingArgs(msg); args != nil {
-				if jsonErr := p.streamJSON(ctx, args, ch); jsonErr == nil {
-					return
-				}
+		// Resolution order:
+		// 1. Interactive PTY (if adapter supports it) — multi-turn session context
+		// 2. JSON streaming (if adapter provides StreamingArgs) — structured events
+		// 3. Non-interactive exec — simplest fallback
+
+		if p.adapter.SupportsInteractivePTY() {
+			if err := p.streamInteractive(ctx, msg, ch); err == nil {
+				return
 			}
-			// Last resort: non-interactive exec.
-			if fallbackErr := p.streamFallback(ctx, msg, ch); fallbackErr != nil {
-				ch <- provider.StreamEvent{Type: "error", Error: err.Error()}
+		}
+
+		if args := p.adapter.StreamingArgs(msg); args != nil {
+			if err := p.streamJSON(ctx, args, ch); err == nil {
+				return
 			}
+		}
+
+		if err := p.streamFallback(ctx, msg, ch); err != nil {
+			ch <- provider.StreamEvent{Type: "error", Error: err.Error()}
 		}
 	}()
 

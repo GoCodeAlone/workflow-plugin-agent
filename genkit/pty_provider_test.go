@@ -49,6 +49,7 @@ func (m *mockCLIAdapter) ParseResponse(raw string) string {
 	return stripANSI(raw)
 }
 
+func (m *mockCLIAdapter) SupportsInteractivePTY() bool             { return false }
 func (m *mockCLIAdapter) StreamingArgs(_ string) []string          { return nil }
 func (m *mockCLIAdapter) ParseStreamEvent(_ string) (string, bool) { return "", false }
 
