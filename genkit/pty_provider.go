@@ -302,12 +302,18 @@ func (p *ptyProvider) extractResponse(screen string) string {
 	lines := strings.Split(screen, "\n")
 	var response []string
 
-	// Strategy 1: Look for ● (Copilot-style response markers).
-	// Collect all ● lines as response text.
+	// Strategy 1: Look for ● (Copilot-style response markers) that come AFTER
+	// the user's ❯ input line. Skip system ● lines (💡, Environment).
+	seenUserInput := false
 	for _, line := range lines {
 		trimmed := strings.TrimSpace(line)
-		if strings.HasPrefix(trimmed, "●") && !strings.Contains(trimmed, "💡") && !strings.Contains(trimmed, "Environment") {
-			// Remove the ● prefix
+		// Track user input lines
+		if strings.Contains(trimmed, "❯") && !strings.Contains(trimmed, "Type @") && !strings.Contains(trimmed, "1. Yes") {
+			seenUserInput = true
+			response = nil // reset — only collect responses after the LAST user input
+		}
+		// Collect response lines after user input
+		if seenUserInput && strings.HasPrefix(trimmed, "●") && !strings.Contains(trimmed, "💡") && !strings.Contains(trimmed, "Environment") {
 			text := strings.TrimSpace(strings.TrimPrefix(trimmed, "●"))
 			if text != "" {
 				response = append(response, text)
@@ -315,8 +321,7 @@ func (p *ptyProvider) extractResponse(screen string) string {
 		}
 	}
 	if len(response) > 0 {
-		// Return the LAST response (most recent turn)
-		return response[len(response)-1]
+		return strings.Join(response, "\n")
 	}
 
 	// Strategy 2: Look for text between greyed ❯ and the next ❯ prompt (Claude Code style).

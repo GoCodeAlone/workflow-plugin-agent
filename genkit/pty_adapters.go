@@ -147,10 +147,28 @@ func (CopilotCLIAdapter) DetectPrompt(output string) bool {
 }
 
 func (CopilotCLIAdapter) DetectResponseEnd(output string) bool {
-	// Response is complete when we see ● (assistant marker) followed by a new ❯ prompt.
-	hasResponse := strings.Contains(output, "●")
-	hasNewPrompt := copilotPromptRegex.MatchString(output)
-	return hasResponse && hasNewPrompt
+	// Response is complete when we see a ● response line AFTER the user's ❯ input line,
+	// followed by a new ❯ prompt with "Type @". We look for the pattern:
+	//   ❯ <user message>
+	//   ● <response>
+	//   ❯  Type @...
+	lines := strings.Split(output, "\n")
+	seenUserInput := false
+	seenResponse := false
+	for _, l := range lines {
+		trimmed := strings.TrimSpace(l)
+		// User input line: ❯ followed by actual text (not "Type @" placeholder)
+		if strings.Contains(trimmed, "❯") && !strings.Contains(trimmed, "Type @") && !strings.Contains(trimmed, "1. Yes") {
+			seenUserInput = true
+			seenResponse = false // reset for each new user input
+		}
+		// Response line after user input
+		if seenUserInput && strings.HasPrefix(trimmed, "●") && !strings.Contains(trimmed, "💡") && !strings.Contains(trimmed, "Environment") {
+			seenResponse = true
+		}
+	}
+	// Complete when we have response AND the prompt is back
+	return seenResponse && copilotPromptRegex.MatchString(output)
 }
 
 func (CopilotCLIAdapter) ParseResponse(raw string) string {
