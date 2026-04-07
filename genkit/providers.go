@@ -123,12 +123,22 @@ func NewOllamaProvider(ctx context.Context, model, serverAddress string, maxToke
 	}
 	p := &ollamaPlugin.Ollama{ServerAddress: serverAddress, Timeout: 300} // 5 min — model loading can be slow
 	g := initGenkitWithPlugin(ctx, gk.WithPlugins(p))
+	// Build Ollama-native config. Disable thinking by default — it adds
+	// latency and leaks reasoning as text in complex multi-tool prompts.
+	// Users who want thinking can enable it per-session later.
+	ollamaCfg := &ollamaPlugin.GenerateContentConfig{
+		Think: ollamaPlugin.ThinkEnabled(false),
+	}
+	if maxTokens > 0 {
+		ollamaCfg.NumPredict = &maxTokens
+	}
+
 	return &genkitProvider{
-		g:             g,
-		modelName:     "ollama/" + model,
-		name:          "ollama",
-		maxTokens:     maxTokens,
-		skipCommonCfg: true, // Ollama rejects GenerationCommonConfig (maxOutputTokens)
+		g:            g,
+		modelName:    "ollama/" + model,
+		name:         "ollama",
+		maxTokens:    maxTokens,
+		customConfig: ollamaCfg,
 		authInfo: provider.AuthModeInfo{
 			Mode:        "none",
 			DisplayName: "Ollama (local)",
