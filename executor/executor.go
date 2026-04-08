@@ -68,6 +68,18 @@ type Config struct {
 	// a non-empty string, the loop exits with status "completed" and that
 	// string as the Result.Content. Nil means no custom termination.
 	ShouldStop func() (reason string)
+
+	// TrustEngine evaluates trust rules before tool execution. Nil = no trust enforcement.
+	TrustEngine TrustEvaluator
+
+	// SandboxMode routes bash and file tool calls through ContainerManager.
+	SandboxMode bool
+
+	// ContainerMgr provides Docker container execution. Required when SandboxMode is true.
+	ContainerMgr ContainerExecutor
+
+	// SandboxSpec is the container configuration for sandbox mode.
+	SandboxSpec *SandboxConfig
 }
 
 // Result is the outcome of an Execute call.
@@ -283,24 +295,94 @@ func Execute(ctx context.Context, cfg Config, systemPrompt, userTask, agentID st
 				ToolArgs:   copyArgs(tc.Arguments),
 			})
 
-			if cfg.ToolRegistry != nil {
-				// Build tool context with agent/task IDs
-				toolCtx := tools.WithAgentID(ctx, agentID)
-				if cfg.TaskID != "" {
-					toolCtx = tools.WithTaskID(toolCtx, cfg.TaskID)
+			// Trust evaluation: check if the tool call is permitted.
+			if cfg.TrustEngine != nil && !isError {
+				trustAction := cfg.TrustEngine.Evaluate(ctx, tc.Name, tc.Arguments)
+
+				if (tc.Name == "shell_exec" || tc.Name == "bash") && trustAction == ActionAllow {
+					if cmdStr, ok := tc.Arguments["command"].(string); ok {
+						trustAction = cfg.TrustEngine.EvaluateCommand(cmdStr)
+					}
+				}
+				if (tc.Name == "file_read" || tc.Name == "file_write" || tc.Name == "file_list") && trustAction == ActionAllow {
+					if pathStr, ok := tc.Arguments["path"].(string); ok {
+						pathAction := cfg.TrustEngine.EvaluatePath(pathStr)
+						if pathAction == ActionDeny || (pathAction == ActionAsk && trustAction != ActionDeny) {
+							trustAction = pathAction
+						}
+					}
 				}
 
-				result, execErr := cfg.ToolRegistry.Execute(toolCtx, tc.Name, tc.Arguments)
-				if execErr != nil {
-					resultStr = fmt.Sprintf("Error: %v", execErr)
+				switch trustAction {
+				case ActionDeny:
+					resultStr = fmt.Sprintf("Tool %q denied by trust policy", tc.Name)
 					isError = true
-				} else {
-					resultBytes, _ := json.Marshal(result)
-					resultStr = string(resultBytes)
+					_ = cfg.Transcript.Record(ctx, TranscriptEntry{
+						ID:        uuid.New().String(),
+						AgentID:   agentID,
+						TaskID:    cfg.TaskID,
+						ProjectID: cfg.ProjectID,
+						Iteration: iterCount,
+						Role:      provider.RoleUser,
+						Content:   fmt.Sprintf("[TRUST DENY] %s by %s", tc.Name, agentID),
+					})
+				case ActionAsk:
+					resultStr = fmt.Sprintf("Tool %q requires human approval (trust policy: ask)", tc.Name)
+					isError = true
+					_ = cfg.Transcript.Record(ctx, TranscriptEntry{
+						ID:        uuid.New().String(),
+						AgentID:   agentID,
+						TaskID:    cfg.TaskID,
+						ProjectID: cfg.ProjectID,
+						Iteration: iterCount,
+						Role:      provider.RoleUser,
+						Content:   fmt.Sprintf("[TRUST ASK] %s by %s", tc.Name, agentID),
+					})
 				}
-			} else {
-				resultStr = "Tool execution not available"
-				isError = true
+			}
+
+			// Execute tool if not blocked by trust.
+			if !isError {
+				if cfg.ToolRegistry != nil {
+					toolCtx := tools.WithAgentID(ctx, agentID)
+					if cfg.TaskID != "" {
+						toolCtx = tools.WithTaskID(toolCtx, cfg.TaskID)
+					}
+
+					// Sandbox mode: route bash/shell tools through container.
+					if cfg.SandboxMode && cfg.ContainerMgr != nil && cfg.ContainerMgr.IsAvailable() &&
+						(tc.Name == "shell_exec" || tc.Name == "bash") {
+						if cmdStr, ok := tc.Arguments["command"].(string); ok {
+							stdout, stderr, exitCode, execErr := cfg.ContainerMgr.ExecInContainer(
+								ctx, cfg.ProjectID, cmdStr, "/workspace", 60,
+							)
+							if execErr != nil {
+								resultStr = fmt.Sprintf("Error (sandbox): %v", execErr)
+								isError = true
+							} else {
+								result := map[string]any{
+									"stdout":    stdout,
+									"stderr":    stderr,
+									"exit_code": exitCode,
+								}
+								resultBytes, _ := json.Marshal(result)
+								resultStr = string(resultBytes)
+							}
+						}
+					} else {
+						result, execErr := cfg.ToolRegistry.Execute(toolCtx, tc.Name, tc.Arguments)
+						if execErr != nil {
+							resultStr = fmt.Sprintf("Error: %v", execErr)
+							isError = true
+						} else {
+							resultBytes, _ := json.Marshal(result)
+							resultStr = string(resultBytes)
+						}
+					}
+				} else {
+					resultStr = "Tool execution not available"
+					isError = true
+				}
 			}
 
 			// Handle approval gates

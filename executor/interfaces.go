@@ -153,3 +153,56 @@ type NullSecretRedactor struct{}
 func (n *NullSecretRedactor) Redact(text string) string { return text }
 
 func (n *NullSecretRedactor) CheckAndRedact(_ *provider.Message) {}
+
+// Action mirrors policy.Action to avoid circular imports.
+type Action string
+
+const (
+	ActionAllow Action = "allow"
+	ActionDeny  Action = "deny"
+	ActionAsk   Action = "ask"
+)
+
+// TrustEvaluator checks whether a tool call is permitted.
+type TrustEvaluator interface {
+	// Evaluate returns the trust action for a tool call.
+	Evaluate(ctx context.Context, toolName string, args map[string]any) Action
+	// EvaluateCommand returns the trust action for a bash command.
+	EvaluateCommand(cmd string) Action
+	// EvaluatePath returns the trust action for a file path.
+	EvaluatePath(path string) Action
+}
+
+// ContainerExecutor can run commands inside a Docker container.
+type ContainerExecutor interface {
+	IsAvailable() bool
+	EnsureContainer(ctx context.Context, projectID, workspacePath string, spec any) (string, error)
+	ExecInContainer(ctx context.Context, projectID, command, workDir string, timeout int) (stdout, stderr string, exitCode int, err error)
+}
+
+// SandboxConfig holds per-agent Docker sandbox settings.
+type SandboxConfig struct {
+	Enabled      bool          `json:"enabled" yaml:"enabled"`
+	Image        string        `json:"image" yaml:"image"`
+	Network      string        `json:"network" yaml:"network"`
+	Memory       string        `json:"memory" yaml:"memory"`
+	CPU          float64       `json:"cpu" yaml:"cpu"`
+	Mounts       []SandboxMount `json:"mounts" yaml:"mounts"`
+	InitCommands []string      `json:"init" yaml:"init"`
+}
+
+// SandboxMount is a bind mount for a sandbox container.
+type SandboxMount struct {
+	Src      string `json:"src" yaml:"src"`
+	Dst      string `json:"dst" yaml:"dst"`
+	ReadOnly bool   `json:"readonly" yaml:"readonly"`
+}
+
+// NullTrustEvaluator allows everything (no trust enforcement).
+type NullTrustEvaluator struct{}
+
+func (n *NullTrustEvaluator) Evaluate(_ context.Context, _ string, _ map[string]any) Action {
+	return ActionAllow
+}
+func (n *NullTrustEvaluator) EvaluateCommand(_ string) Action { return ActionAllow }
+func (n *NullTrustEvaluator) EvaluatePath(_ string) Action    { return ActionAllow }
