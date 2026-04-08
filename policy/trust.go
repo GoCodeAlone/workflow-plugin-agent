@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
 	"strings"
 	"sync"
 )
@@ -35,25 +36,26 @@ type PolicyEngine interface {
 
 // TrustEngine evaluates trust rules for tool calls, paths, and commands.
 type TrustEngine struct {
-	mu        sync.RWMutex
-	rules     []TrustRule
-	policyDB  PolicyEngine
-	permStore *PermissionStore
-	mode      string
+	mu            sync.RWMutex
+	presetRules   []TrustRule // rules loaded from the active mode preset
+	explicitRules []TrustRule // user/config-added rules; preserved across SetMode calls
+	policyDB      PolicyEngine
+	permStore     *PermissionStore
+	mode          string
 }
 
 // NewTrustEngine creates a TrustEngine with the given mode and explicit rules.
-// If mode is a known preset, the preset rules are prepended.
+// If mode is a known preset, the preset rules are loaded into presetRules.
 // policyDB is optional (may be nil).
 func NewTrustEngine(mode string, rules []TrustRule, policyDB PolicyEngine) *TrustEngine {
 	te := &TrustEngine{
-		policyDB: policyDB,
-		mode:     mode,
+		policyDB:      policyDB,
+		mode:          mode,
+		explicitRules: append([]TrustRule(nil), rules...),
 	}
 	if preset, ok := ModePresets[mode]; ok {
-		te.rules = append(te.rules, preset...)
+		te.presetRules = append([]TrustRule(nil), preset...)
 	}
-	te.rules = append(te.rules, rules...)
 	return te
 }
 
@@ -71,7 +73,8 @@ func (te *TrustEngine) Mode() string {
 	return te.mode
 }
 
-// SetMode switches the active mode preset. Returns the new rules that were loaded.
+// SetMode switches the active mode preset. Returns the new preset rules that were loaded.
+// Explicit rules added via AddRule or the constructor are preserved.
 // If mode is unknown, returns nil and mode is unchanged.
 func (te *TrustEngine) SetMode(mode string) []TrustRule {
 	preset, ok := ModePresets[mode]
@@ -81,25 +84,24 @@ func (te *TrustEngine) SetMode(mode string) []TrustRule {
 	te.mu.Lock()
 	defer te.mu.Unlock()
 	te.mode = mode
-	// Replace preset rules but keep explicit (non-preset) rules.
-	te.rules = make([]TrustRule, len(preset))
-	copy(te.rules, preset)
+	te.presetRules = append([]TrustRule(nil), preset...)
 	return preset
 }
 
-// AddRule appends a rule dynamically. Deny rules take precedence at evaluation time.
+// AddRule appends an explicit rule dynamically. These are preserved across SetMode calls.
 func (te *TrustEngine) AddRule(rule TrustRule) {
 	te.mu.Lock()
 	defer te.mu.Unlock()
-	te.rules = append(te.rules, rule)
+	te.explicitRules = append(te.explicitRules, rule)
 }
 
-// Rules returns a copy of the active rules.
+// Rules returns a copy of all active rules (preset + explicit).
 func (te *TrustEngine) Rules() []TrustRule {
 	te.mu.RLock()
 	defer te.mu.RUnlock()
-	out := make([]TrustRule, len(te.rules))
-	copy(out, te.rules)
+	out := make([]TrustRule, 0, len(te.presetRules)+len(te.explicitRules))
+	out = append(out, te.presetRules...)
+	out = append(out, te.explicitRules...)
 	return out
 }
 
@@ -117,7 +119,9 @@ func (te *TrustEngine) Evaluate(ctx context.Context, toolName string, args map[s
 //  5. Default: Deny
 func (te *TrustEngine) EvaluateScoped(ctx context.Context, toolName string, args map[string]any, scope string) Action {
 	te.mu.RLock()
-	rules := te.rules
+	rules := make([]TrustRule, 0, len(te.presetRules)+len(te.explicitRules))
+	rules = append(rules, te.presetRules...)
+	rules = append(rules, te.explicitRules...)
 	permStore := te.permStore
 	policyDB := te.policyDB
 	te.mu.RUnlock()
@@ -174,7 +178,9 @@ func (te *TrustEngine) EvaluateScoped(ctx context.Context, toolName string, args
 // Matches rules with "bash:" prefix patterns.
 func (te *TrustEngine) EvaluateCommand(cmd string) Action {
 	te.mu.RLock()
-	rules := te.rules
+	rules := make([]TrustRule, 0, len(te.presetRules)+len(te.explicitRules))
+	rules = append(rules, te.presetRules...)
+	rules = append(rules, te.explicitRules...)
 	te.mu.RUnlock()
 
 	var matched []Action
@@ -206,7 +212,9 @@ func (te *TrustEngine) EvaluateCommand(cmd string) Action {
 // Matches rules with "path:" prefix patterns.
 func (te *TrustEngine) EvaluatePath(path string) Action {
 	te.mu.RLock()
-	rules := te.rules
+	rules := make([]TrustRule, 0, len(te.presetRules)+len(te.explicitRules))
+	rules = append(rules, te.presetRules...)
+	rules = append(rules, te.explicitRules...)
 	te.mu.RUnlock()
 
 	var matched []Action
@@ -293,19 +301,17 @@ func matchCommandPattern(pattern, cmd string) bool {
 }
 
 // matchPathPattern checks if a rule pattern matches a file path.
+// Patterns with ~ are expanded to the user's home directory.
 func matchPathPattern(pattern, path string) bool {
 	if !strings.HasPrefix(pattern, "path:") {
 		return false
 	}
 	pathPattern := strings.TrimPrefix(pattern, "path:")
-	// Expand ~ to match absolute paths
+	// Expand ~ to the real home directory so deny rules like path:~/.ssh/* match
+	// absolute paths like /Users/jon/.ssh/id_rsa.
 	if strings.HasPrefix(pathPattern, "~/") {
-		// For matching, just check if the path ends with the same suffix
-		suffix := strings.TrimPrefix(pathPattern, "~")
-		if strings.HasSuffix(pathPattern, "*") {
-			prefix := strings.TrimSuffix(suffix, "*")
-			// Check all common home dirs
-			return strings.Contains(path, prefix)
+		if home, err := os.UserHomeDir(); err == nil {
+			pathPattern = home + pathPattern[1:]
 		}
 	}
 	if strings.HasSuffix(pathPattern, "*") {
@@ -390,12 +396,18 @@ func ParseClaudeCodeSettings(data []byte) ([]TrustRule, error) {
 }
 
 // normalizeClaudeToolPattern converts Claude Code format "Bash(cmd:*)" to "bash:cmd *".
+// It splits on the LAST colon so commands containing colons (e.g. "fix: bug") are preserved.
 func normalizeClaudeToolPattern(pattern string) string {
 	if strings.HasPrefix(pattern, "Bash(") && strings.HasSuffix(pattern, ")") {
 		inner := pattern[5 : len(pattern)-1] // strip "Bash(" and ")"
-		// "git:*" → "git *", "rm -rf:*" → "rm -rf *"
-		inner = strings.Replace(inner, ":*", " *", 1)
-		inner = strings.Replace(inner, ":", " ", 1)
+		// Find last ":" which separates the command from the wildcard specifier.
+		if idx := strings.LastIndex(inner, ":"); idx >= 0 {
+			cmd := inner[:idx]
+			rest := inner[idx+1:]
+			if rest == "*" {
+				return "bash:" + cmd + " *"
+			}
+		}
 		return "bash:" + inner
 	}
 	return pattern

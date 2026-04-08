@@ -63,30 +63,46 @@ func (ps *PermissionStore) Revoke(pattern, scope string) error {
 	return err
 }
 
-// Check returns the persisted action for a pattern+scope, if any.
-// Checks scope-specific first, then falls back to global.
-func (ps *PermissionStore) Check(pattern, scope string) (Action, bool) {
-	var actionStr string
-	err := ps.db.QueryRow(
-		"SELECT action FROM permission_grants WHERE pattern = ? AND scope = ? LIMIT 1",
-		pattern, scope,
-	).Scan(&actionStr)
-	if err == nil {
-		return Action(actionStr), true
+// Check returns the persisted action for a toolName+scope using glob matching.
+// Stored patterns (e.g. "blackboard_*") are matched against the incoming toolName
+// using the same logic as TrustEngine rule evaluation. Deny wins across all matches.
+// Scope-specific grants are checked alongside global grants.
+func (ps *PermissionStore) Check(toolName, scope string) (Action, bool) {
+	query := `SELECT pattern, action FROM permission_grants WHERE scope = ? OR scope = 'global'`
+	rows, err := ps.db.Query(query, scope)
+	if err != nil {
+		return "", false
 	}
+	defer func() { _ = rows.Close() }()
 
-	// Fall back to global if scope is not global.
-	if scope != "global" {
-		err = ps.db.QueryRow(
-			"SELECT action FROM permission_grants WHERE pattern = ? AND scope = 'global' LIMIT 1",
-			pattern,
-		).Scan(&actionStr)
-		if err == nil {
-			return Action(actionStr), true
+	var matched []Action
+	for rows.Next() {
+		var storedPattern, actionStr string
+		if err := rows.Scan(&storedPattern, &actionStr); err != nil {
+			continue
+		}
+		if matchToolPattern(storedPattern, toolName) ||
+			matchCommandPattern(storedPattern, toolName) ||
+			matchPathPattern(storedPattern, toolName) {
+			matched = append(matched, Action(actionStr))
 		}
 	}
+	if rows.Err() != nil || len(matched) == 0 {
+		return "", false
+	}
 
-	return "", false
+	// Deny wins
+	for _, a := range matched {
+		if a == Deny {
+			return Deny, true
+		}
+	}
+	for _, a := range matched {
+		if a == Allow {
+			return Allow, true
+		}
+	}
+	return Ask, true
 }
 
 // List returns all persisted grants.

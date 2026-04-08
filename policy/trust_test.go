@@ -2,6 +2,7 @@ package policy
 
 import (
 	"context"
+	"os"
 	"testing"
 )
 
@@ -138,6 +139,58 @@ func TestRulesFromScope(t *testing.T) {
 	action = te.EvaluateScoped(context.Background(), "file_write", nil, "agent:reviewer")
 	if action != Allow {
 		t.Errorf("reviewer scope: got %v, want Allow", action)
+	}
+}
+
+// Fix: SetMode must preserve explicit rules added via AddRule.
+func TestSetModePreservesExplicitRules(t *testing.T) {
+	te := NewTrustEngine("conservative", nil, nil)
+	te.AddRule(TrustRule{Pattern: "custom_tool", Action: Allow})
+	te.SetMode("locked")
+	if te.Mode() != "locked" {
+		t.Errorf("mode = %q, want locked", te.Mode())
+	}
+	// custom_tool was added explicitly — must survive the mode switch
+	action := te.Evaluate(context.Background(), "custom_tool", nil)
+	if action != Allow {
+		t.Errorf("explicit rule lost after SetMode: got %v, want Allow", action)
+	}
+}
+
+// Fix: tilde in path patterns must expand to $HOME so deny rules actually fire.
+func TestEvaluatePathTildeExpansion(t *testing.T) {
+	rules := []TrustRule{
+		{Pattern: "path:~/.ssh/*", Action: Deny},
+	}
+	te := NewTrustEngine("custom", rules, nil)
+	// Use os.UserHomeDir() to construct a real absolute path
+	home, err := os.UserHomeDir()
+	if err != nil {
+		t.Skip("cannot determine home dir")
+	}
+	absPath := home + "/.ssh/id_rsa"
+	if te.EvaluatePath(absPath) != Deny {
+		t.Errorf("tilde deny rule did not match absolute path %q", absPath)
+	}
+}
+
+// Fix: normalizeClaudeToolPattern must handle commands containing colons.
+func TestParseClaudeCodeMultiColonPattern(t *testing.T) {
+	tests := []struct {
+		input   string
+		pattern string
+	}{
+		{"Bash(git:*)", "bash:git *"},
+		{"Bash(rm -rf:*)", "bash:rm -rf *"},
+		{"Bash(git commit -m \"fix: bug\":*)", "bash:git commit -m \"fix: bug\" *"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.input, func(t *testing.T) {
+			got := normalizeClaudeToolPattern(tt.input)
+			if got != tt.pattern {
+				t.Errorf("normalizeClaudeToolPattern(%q) = %q, want %q", tt.input, got, tt.pattern)
+			}
+		})
 	}
 }
 

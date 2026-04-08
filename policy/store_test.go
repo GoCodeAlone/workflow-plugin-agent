@@ -35,11 +35,11 @@ func TestPermissionStoreGrantAndCheck(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if err := ps.Grant("bash:git *", Allow, "global", "user"); err != nil {
+	if err := ps.Grant("file_read", Allow, "global", "user"); err != nil {
 		t.Fatal(err)
 	}
 
-	action, ok := ps.Check("bash:git *", "global")
+	action, ok := ps.Check("file_read", "global")
 	if !ok {
 		t.Fatal("expected match")
 	}
@@ -55,7 +55,7 @@ func TestPermissionStoreNoMatch(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	_, ok := ps.Check("bash:git *", "global")
+	_, ok := ps.Check("file_read", "global")
 	if ok {
 		t.Error("expected no match")
 	}
@@ -68,14 +68,47 @@ func TestPermissionStoreRevoke(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	_ = ps.Grant("bash:git *", Allow, "global", "user")
-	if err := ps.Revoke("bash:git *", "global"); err != nil {
+	_ = ps.Grant("file_read", Allow, "global", "user")
+	if err := ps.Revoke("file_read", "global"); err != nil {
 		t.Fatal(err)
 	}
 
-	_, ok := ps.Check("bash:git *", "global")
+	_, ok := ps.Check("file_read", "global")
 	if ok {
 		t.Error("expected no match after revoke")
+	}
+}
+
+func TestPermissionStoreGlobCheck(t *testing.T) {
+	db := testDB(t)
+	ps, err := NewPermissionStore(db)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	_ = ps.Grant("blackboard_*", Allow, "global", "user")
+
+	// Wildcard grant should match specific tools
+	action, ok := ps.Check("blackboard_read", "global")
+	if !ok {
+		t.Fatal("expected glob match for blackboard_read")
+	}
+	if action != Allow {
+		t.Errorf("got %v, want Allow", action)
+	}
+
+	action, ok = ps.Check("blackboard_write", "global")
+	if !ok {
+		t.Fatal("expected glob match for blackboard_write")
+	}
+	if action != Allow {
+		t.Errorf("got %v, want Allow", action)
+	}
+
+	// Non-matching tool should not match
+	_, ok = ps.Check("file_read", "global")
+	if ok {
+		t.Error("file_read should not match blackboard_* grant")
 	}
 }
 
