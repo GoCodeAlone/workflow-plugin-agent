@@ -323,6 +323,13 @@ func Execute(ctx context.Context, cfg Config, systemPrompt, userTask, agentID st
 
 				switch trustAction {
 				case ActionDeny:
+					emit(cfg, Event{
+						Type:      EventTrustDeny,
+						AgentID:   agentID,
+						Iteration: iterCount,
+						ToolName:  tc.Name,
+						Content:   "denied by trust policy",
+					})
 					resultStr = fmt.Sprintf("Tool %q denied by trust policy", tc.Name)
 					isError = true
 					_ = cfg.Transcript.Record(ctx, TranscriptEntry{
@@ -335,6 +342,13 @@ func Execute(ctx context.Context, cfg Config, systemPrompt, userTask, agentID st
 						Content:   fmt.Sprintf("[TRUST DENY] %s by %s", tc.Name, agentID),
 					})
 				case ActionAsk:
+					emit(cfg, Event{
+						Type:      EventTrustAsk,
+						AgentID:   agentID,
+						Iteration: iterCount,
+						ToolName:  tc.Name,
+						Content:   "queued for human approval",
+					})
 					// Deny immediately when no real Approver is configured — fail-safe.
 					if !hasRealApprover {
 						resultStr = fmt.Sprintf("Tool %q denied: trust policy requires user approval but no Approver is configured", tc.Name)
@@ -377,6 +391,12 @@ func Execute(ctx context.Context, cfg Config, systemPrompt, userTask, agentID st
 
 			// Execute tool if not blocked by trust.
 			if !isError {
+				emit(cfg, Event{
+					Type:      EventTrustAllow,
+					AgentID:   agentID,
+					Iteration: iterCount,
+					ToolName:  tc.Name,
+				})
 				if cfg.ToolRegistry != nil {
 					toolCtx := tools.WithAgentID(ctx, agentID)
 					if cfg.TaskID != "" {

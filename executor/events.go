@@ -11,6 +11,9 @@ const (
 	EventIteration      EventType = "iteration"
 	EventCompleted      EventType = "completed"
 	EventFailed         EventType = "failed"
+	EventTrustAllow     EventType = "trust_allow"
+	EventTrustDeny      EventType = "trust_deny"
+	EventTrustAsk       EventType = "trust_ask"
 )
 
 // Event is emitted during execution for real-time observation.

@@ -353,12 +353,14 @@ func TestExecute_EventSequence(t *testing.T) {
 		t.Errorf("Status: want completed, got %q", result.Status)
 	}
 
-	// Verify event sequence: iteration → thinking → text → tool_call_start → tool_call_result → iteration → text → completed
+	// Verify event sequence: iteration → thinking → text → tool_call_start → trust_deny → tool_call_result → iteration → text → completed
+	// (No TrustEngine set → DenyAllTrustEvaluator → trust_deny emitted before tool_call_result.)
 	expectedTypes := []EventType{
 		EventIteration,
 		EventThinking,
 		EventText,
 		EventToolCallStart,
+		EventTrustDeny,
 		EventToolCallResult,
 		EventIteration,
 		EventText,
@@ -380,8 +382,9 @@ func TestExecute_EventSequence(t *testing.T) {
 	if events[3].ToolName != "echo" {
 		t.Errorf("tool_call_start tool name: want %q, got %q", "echo", events[3].ToolName)
 	}
-	if events[4].ToolName != "echo" {
-		t.Errorf("tool_call_result tool name: want %q, got %q", "echo", events[4].ToolName)
+	// events[4] is trust_deny; events[5] is tool_call_result
+	if events[5].ToolName != "echo" {
+		t.Errorf("tool_call_result tool name: want %q, got %q", "echo", events[5].ToolName)
 	}
 }
 
