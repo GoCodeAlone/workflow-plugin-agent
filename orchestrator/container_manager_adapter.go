@@ -7,7 +7,6 @@ import (
 )
 
 // ContainerManagerAdapter wraps ContainerManager to satisfy executor.ContainerExecutor.
-// It converts executor.SandboxConfig to orchestrator.WorkspaceSpec for the underlying manager.
 type ContainerManagerAdapter struct {
 	cm *ContainerManager
 }
@@ -22,19 +21,7 @@ func (a *ContainerManagerAdapter) IsAvailable() bool {
 }
 
 func (a *ContainerManagerAdapter) EnsureContainer(ctx context.Context, projectID, workspacePath string, spec executor.SandboxConfig) (string, error) {
-	ws := WorkspaceSpec{
-		Image:        spec.Image,
-		NetworkMode:  spec.Network,
-		InitCommands: spec.InitCommands,
-	}
-	for _, m := range spec.Mounts {
-		ws.Mounts = append(ws.Mounts, MountSpec{
-			Source:   m.Src,
-			Target:   m.Dst,
-			ReadOnly: m.ReadOnly,
-		})
-	}
-	return a.cm.EnsureContainer(ctx, projectID, workspacePath, ws)
+	return a.cm.EnsureContainer(ctx, projectID, workspacePath, spec)
 }
 
 func (a *ContainerManagerAdapter) ExecInContainer(ctx context.Context, projectID, command, workDir string, timeout int) (string, string, int, error) {

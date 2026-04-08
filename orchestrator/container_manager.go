@@ -8,10 +8,12 @@ import (
 	"io"
 	"log"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/GoCodeAlone/workflow-plugin-agent/executor"
 	"github.com/docker/docker/api/types/container"
 	"github.com/docker/docker/api/types/image"
 	"github.com/docker/docker/api/types/mount"
@@ -113,7 +115,8 @@ func (cm *ContainerManager) IsAvailable() bool {
 
 // EnsureContainer creates or reuses a container for the given project.
 // The workspace path is bind-mounted at /workspace inside the container.
-func (cm *ContainerManager) EnsureContainer(ctx context.Context, projectID, workspacePath string, spec WorkspaceSpec) (string, error) {
+// spec is an executor.SandboxConfig so that ContainerManager satisfies executor.ContainerExecutor.
+func (cm *ContainerManager) EnsureContainer(ctx context.Context, projectID, workspacePath string, spec executor.SandboxConfig) (string, error) {
 	if !cm.available {
 		return "", fmt.Errorf("container manager: docker not available")
 	}
@@ -140,17 +143,10 @@ func (cm *ContainerManager) EnsureContainer(ctx context.Context, projectID, work
 		return "", fmt.Errorf("container manager: pull image: %w", err)
 	}
 
-	// Build env slice
-	var env []string
-	for k, v := range spec.Env {
-		env = append(env, k+"="+v)
-	}
-
 	// Create container with sleep infinity entrypoint
 	containerCfg := &container.Config{
 		Image:      spec.Image,
 		Cmd:        []string{"sleep", "infinity"},
-		Env:        env,
 		WorkingDir: "/workspace",
 	}
 
@@ -162,27 +158,31 @@ func (cm *ContainerManager) EnsureContainer(ctx context.Context, projectID, work
 		},
 	}
 	for _, m := range spec.Mounts {
-		if err := validateMountPaths(m.Source, m.Target); err != nil {
+		if err := validateMountPaths(m.Src, m.Dst); err != nil {
 			return "", fmt.Errorf("container manager: invalid mount: %w", err)
 		}
 		mounts = append(mounts, mount.Mount{
 			Type:     mount.TypeBind,
-			Source:   m.Source,
-			Target:   m.Target,
+			Source:   m.Src,
+			Target:   m.Dst,
 			ReadOnly: m.ReadOnly,
 		})
 	}
 	hostCfg := &container.HostConfig{
 		Mounts: mounts,
 	}
-	if spec.MemoryLimit > 0 {
-		hostCfg.Memory = spec.MemoryLimit
+	if spec.Memory != "" {
+		if memBytes, err := parseMemoryString(spec.Memory); err == nil {
+			hostCfg.Memory = memBytes
+		} else {
+			log.Printf("container_manager: could not parse memory %q: %v", spec.Memory, err)
+		}
 	}
-	if spec.CPULimit > 0 {
-		hostCfg.NanoCPUs = int64(spec.CPULimit * 1e9)
+	if spec.CPU > 0 {
+		hostCfg.NanoCPUs = int64(spec.CPU * 1e9)
 	}
-	if spec.NetworkMode != "" {
-		hostCfg.NetworkMode = container.NetworkMode(spec.NetworkMode)
+	if spec.Network != "" {
+		hostCfg.NetworkMode = container.NetworkMode(spec.Network)
 	}
 
 	resp, err := cm.client.ContainerCreate(ctx, containerCfg, hostCfg, nil, nil, "ratchet-"+projectID)
@@ -209,10 +209,9 @@ func (cm *ContainerManager) EnsureContainer(ctx context.Context, projectID, work
 		)
 	}
 
-	// Run init commands
+	// Run init commands; log failures but continue — init commands are best-effort.
 	for _, initCmd := range spec.InitCommands {
-		_, _, _, err := cm.execInContainerLocked(ctx, resp.ID, initCmd, "/workspace", 60)
-		if err != nil {
+		if _, _, _, err := cm.execInContainerLocked(ctx, resp.ID, initCmd, "/workspace", 60); err != nil {
 			log.Printf("container_manager: init command %q failed: %v", initCmd, err)
 		}
 	}
@@ -399,6 +398,28 @@ func (cm *ContainerManager) ensureImage(ctx context.Context, img string) error {
 	defer func() { _ = reader.Close() }()
 	_, err = io.Copy(io.Discard, reader)
 	return err
+}
+
+// parseMemoryString converts a human-readable memory string (e.g. "512m", "1g") to bytes.
+func parseMemoryString(s string) (int64, error) {
+	s = strings.TrimSpace(strings.ToLower(s))
+	if s == "" {
+		return 0, fmt.Errorf("empty memory string")
+	}
+	multipliers := map[byte]int64{'k': 1024, 'm': 1024 * 1024, 'g': 1024 * 1024 * 1024}
+	last := s[len(s)-1]
+	if mul, ok := multipliers[last]; ok {
+		n, err := strconv.ParseInt(s[:len(s)-1], 10, 64)
+		if err != nil {
+			return 0, fmt.Errorf("parse memory %q: %w", s, err)
+		}
+		return n * mul, nil
+	}
+	n, err := strconv.ParseInt(s, 10, 64)
+	if err != nil {
+		return 0, fmt.Errorf("parse memory %q: %w", s, err)
+	}
+	return n, nil
 }
 
 // validateMountPaths checks that a bind mount source and target are safe.

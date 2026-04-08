@@ -74,6 +74,7 @@ func TestMeshSupport_EndToEnd(t *testing.T) {
 	cfg := Config{
 		Provider:      p,
 		ToolRegistry:  reg,
+		TrustEngine:   &NullTrustEvaluator{}, // allow all tools in this unit test
 		MaxIterations: 10,
 		Inbox:         inbox,
 		OnEvent: func(e Event) {

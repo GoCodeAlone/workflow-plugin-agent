@@ -4,6 +4,7 @@ import (
 	"context"
 	"testing"
 
+	"github.com/GoCodeAlone/workflow-plugin-agent/executor"
 	"github.com/GoCodeAlone/workflow-plugin-agent/orchestrator/tools"
 	"github.com/GoCodeAlone/workflow/module"
 
@@ -35,7 +36,7 @@ func TestContainerManager_EnsureContainer_Unavailable(t *testing.T) {
 		available:  false,
 	}
 
-	_, err := cm.EnsureContainer(context.Background(), "proj-1", "/tmp/ws", WorkspaceSpec{Image: "alpine"})
+	_, err := cm.EnsureContainer(context.Background(), "proj-1", "/tmp/ws", executor.SandboxConfig{Image: "alpine"})
 	if err == nil {
 		t.Fatal("expected error when Docker is unavailable")
 	}
@@ -136,7 +137,7 @@ func TestContainerManager_EnsureContainer_EmptyImage(t *testing.T) {
 		available:  true,
 	}
 
-	_, err := cm.EnsureContainer(context.Background(), "proj-1", "/tmp/ws", WorkspaceSpec{})
+	_, err := cm.EnsureContainer(context.Background(), "proj-1", "/tmp/ws", executor.SandboxConfig{})
 	if err == nil {
 		t.Fatal("expected error for empty image")
 	}

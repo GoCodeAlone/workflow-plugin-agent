@@ -159,3 +159,24 @@ func TestPermissionStoreScopedCheck(t *testing.T) {
 		t.Errorf("got %v, want Allow for global scope", action)
 	}
 }
+
+// TestTrustEngineDataRace verifies there are no data races when TrustEngine methods
+// are called concurrently. Run with: go test -race ./policy/
+func TestTrustEngineDataRace(t *testing.T) {
+	te := NewTrustEngine("conservative", nil, nil)
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for i := 0; i < 100; i++ {
+			te.SetMode("permissive")
+			te.SetMode("conservative")
+		}
+	}()
+	for i := 0; i < 100; i++ {
+		te.EvaluateCommand("git status")
+		te.EvaluatePath("/Users/jon/.ssh/id_rsa")
+		te.Mode()
+	}
+	<-done
+}

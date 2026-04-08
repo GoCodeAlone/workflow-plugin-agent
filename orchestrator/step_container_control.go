@@ -5,6 +5,7 @@ import (
 	"fmt"
 
 	"github.com/GoCodeAlone/modular"
+	"github.com/GoCodeAlone/workflow-plugin-agent/executor"
 	"github.com/GoCodeAlone/workflow/module"
 	"github.com/GoCodeAlone/workflow/plugin"
 )
@@ -52,7 +53,7 @@ func (s *ContainerControlStep) Execute(ctx context.Context, pc *module.PipelineC
 			return nil, fmt.Errorf("container_control step %q: image required for start", s.name)
 		}
 
-		spec := WorkspaceSpec{Image: imageStr}
+		spec := executor.SandboxConfig{Image: imageStr}
 		cid, err := containerMgr.EnsureContainer(ctx, projectID, workspacePath, spec)
 		if err != nil {
 			return nil, fmt.Errorf("container_control step %q: %w", s.name, err)

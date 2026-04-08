@@ -15,6 +15,19 @@ func TestNullTrustEvaluator(t *testing.T) {
 	}
 }
 
+func TestDenyAllTrustEvaluator(t *testing.T) {
+	te := &DenyAllTrustEvaluator{}
+	if te.Evaluate(context.Background(), "file_write", nil) != ActionDeny {
+		t.Error("DenyAllTrustEvaluator should always deny")
+	}
+	if te.EvaluateCommand("echo hello") != ActionDeny {
+		t.Error("DenyAllTrustEvaluator should always deny commands")
+	}
+	if te.EvaluatePath("/tmp/file") != ActionDeny {
+		t.Error("DenyAllTrustEvaluator should always deny paths")
+	}
+}
+
 type mockTrustEvaluator struct {
 	toolAction Action
 	cmdAction  Action

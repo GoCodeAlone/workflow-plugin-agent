@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"testing"
+	"time"
 
 	"github.com/GoCodeAlone/workflow-plugin-agent/provider"
 	"github.com/GoCodeAlone/workflow-plugin-agent/tools"
@@ -129,6 +130,7 @@ func TestExecute_ToolExecution(t *testing.T) {
 	cfg := Config{
 		Provider:     p,
 		ToolRegistry: reg,
+		TrustEngine:  &NullTrustEvaluator{}, // allow all tools in this unit test
 	}
 	result, err := Execute(context.Background(), cfg, "sys", "task", "agent-1")
 	if err != nil {
@@ -528,6 +530,7 @@ func TestExecute_ToolArgsEventIsCopy(t *testing.T) {
 	cfg := Config{
 		Provider:     p,
 		ToolRegistry: reg,
+		TrustEngine:  &NullTrustEvaluator{}, // allow all tools in this unit test
 		OnEvent: func(e Event) {
 			// Mutate the event's ToolArgs — this should NOT affect tool execution.
 			if e.Type == EventToolCallStart && e.ToolArgs != nil {
@@ -767,4 +770,118 @@ func (s *simpleTool) Name() string                   { return s.name }
 func (s *simpleTool) Definition() provider.ToolDef   { return s.def }
 func (s *simpleTool) Execute(ctx context.Context, args map[string]any) (any, error) {
 	return s.fn(ctx, args)
+}
+
+// TestExecute_ActionAsk_NoApprover_Denies verifies that when no Approver is configured,
+// a trust ActionAsk tool call is denied rather than auto-approved (fail-safe behavior).
+func TestExecute_ActionAsk_NoApprover_Denies(t *testing.T) {
+	var toolExecuted bool
+	reg := tools.NewRegistry()
+	reg.Register(&simpleTool{
+		name: "risky_tool",
+		def:  provider.ToolDef{Name: "risky_tool", Description: "risky"},
+		fn: func(_ context.Context, _ map[string]any) (any, error) {
+			toolExecuted = true
+			return "executed", nil
+		},
+	})
+
+	callN := 0
+	p := &callCountProvider{
+		onChat: func() (*provider.Response, error) {
+			callN++
+			if callN == 1 {
+				return &provider.Response{
+					ToolCalls: []provider.ToolCall{
+						{ID: "tc-1", Name: "risky_tool", Arguments: map[string]any{}},
+					},
+				}, nil
+			}
+			return &provider.Response{Content: "done"}, nil
+		},
+	}
+
+	// TrustEngine returns Ask for risky_tool; Approver is nil (not configured).
+	te := &mockTrustEvaluator{toolAction: ActionAsk}
+	cfg := Config{
+		Provider:     p,
+		ToolRegistry: reg,
+		TrustEngine:  te,
+		// Approver intentionally nil — should default to deny behavior
+	}
+
+	_, err := Execute(context.Background(), cfg, "sys", "task", "agent-1")
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if toolExecuted {
+		t.Error("risky_tool should NOT have been executed when no Approver is configured and trust policy is ask")
+	}
+}
+
+// TestExecute_ActionAsk_WithApprover_Blocks verifies that when an Approver is configured,
+// a trust ActionAsk call blocks until the Approver resolves it.
+func TestExecute_ActionAsk_WithApprover_Blocks(t *testing.T) {
+	var toolExecuted bool
+	var requestReceived bool
+	reg := tools.NewRegistry()
+	reg.Register(&simpleTool{
+		name: "reviewed_tool",
+		def:  provider.ToolDef{Name: "reviewed_tool", Description: "needs approval"},
+		fn: func(_ context.Context, _ map[string]any) (any, error) {
+			toolExecuted = true
+			return "executed", nil
+		},
+	})
+
+	callN := 0
+	p := &callCountProvider{
+		onChat: func() (*provider.Response, error) {
+			callN++
+			if callN == 1 {
+				return &provider.Response{
+					ToolCalls: []provider.ToolCall{
+						{ID: "tc-1", Name: "reviewed_tool", Arguments: map[string]any{}},
+					},
+				}, nil
+			}
+			return &provider.Response{Content: "done"}, nil
+		},
+	}
+
+	approver := &recordingApprover{status: ApprovalApproved}
+	te := &mockTrustEvaluator{toolAction: ActionAsk}
+	cfg := Config{
+		Provider:     p,
+		ToolRegistry: reg,
+		TrustEngine:  te,
+		Approver:     approver,
+	}
+
+	_, err := Execute(context.Background(), cfg, "sys", "task", "agent-1")
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	requestReceived = approver.requested
+	if !requestReceived {
+		t.Error("Approver.Request should have been called for ActionAsk")
+	}
+	if !toolExecuted {
+		t.Error("reviewed_tool should have been executed after approval")
+	}
+}
+
+// recordingApprover records whether Request was called and auto-resolves with a fixed status.
+type recordingApprover struct {
+	requested bool
+	status    ApprovalStatus
+}
+
+func (r *recordingApprover) Request(_ context.Context, _ string, _ map[string]any) (string, error) {
+	r.requested = true
+	return "test-approval-id", nil
+}
+
+func (r *recordingApprover) WaitForResolution(_ context.Context, _ string, _ time.Duration) (*ApprovalRecord, error) {
+	return &ApprovalRecord{Status: r.status}, nil
 }

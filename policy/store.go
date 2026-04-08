@@ -99,7 +99,11 @@ func (ps *PermissionStore) Check(toolName, scope string) (Action, bool) {
 			matched = append(matched, Action(actionStr))
 		}
 	}
-	if rows.Err() != nil || len(matched) == 0 {
+	if err := rows.Err(); err != nil {
+		log.Printf("permission store: check rows iteration error: %v", err)
+		return "", false
+	}
+	if len(matched) == 0 {
 		return "", false
 	}
 

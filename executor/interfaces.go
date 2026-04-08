@@ -5,7 +5,9 @@ import (
 	"context"
 	"time"
 
+	"github.com/GoCodeAlone/workflow-plugin-agent/policy"
 	"github.com/GoCodeAlone/workflow-plugin-agent/provider"
+	"github.com/google/uuid"
 )
 
 // TranscriptEntry is a single recorded message in the agent conversation.
@@ -46,6 +48,10 @@ type ApprovalRecord struct {
 
 // Approver manages approval gate blocking.
 type Approver interface {
+	// Request creates a pending approval for the given tool call and returns its ID.
+	// Implementers should persist the pending approval so WaitForResolution can query it.
+	Request(ctx context.Context, toolName string, args map[string]any) (approvalID string, err error)
+
 	// WaitForResolution blocks until the approval with the given ID is resolved
 	// or the timeout elapses.
 	WaitForResolution(ctx context.Context, approvalID string, timeout time.Duration) (*ApprovalRecord, error)
@@ -120,8 +126,12 @@ type NullTranscript struct{}
 
 func (n *NullTranscript) Record(_ context.Context, _ TranscriptEntry) error { return nil }
 
-// NullApprover is a no-op Approver — always returns "approved".
+// NullApprover is a no-op Approver for dev/testing — auto-approves every request.
 type NullApprover struct{}
+
+func (n *NullApprover) Request(_ context.Context, _ string, _ map[string]any) (string, error) {
+	return uuid.New().String(), nil
+}
 
 func (n *NullApprover) WaitForResolution(_ context.Context, _ string, _ time.Duration) (*ApprovalRecord, error) {
 	return &ApprovalRecord{Status: ApprovalApproved}, nil
@@ -154,13 +164,14 @@ func (n *NullSecretRedactor) Redact(text string) string { return text }
 
 func (n *NullSecretRedactor) CheckAndRedact(_ *provider.Message) {}
 
-// Action mirrors policy.Action to avoid circular imports.
-type Action string
+// Action is a type alias for policy.Action, providing compile-time parity between
+// the executor and policy packages with no string duplication.
+type Action = policy.Action
 
 const (
-	ActionAllow Action = "allow"
-	ActionDeny  Action = "deny"
-	ActionAsk   Action = "ask"
+	ActionAllow Action = policy.Allow
+	ActionDeny  Action = policy.Deny
+	ActionAsk   Action = policy.Ask
 )
 
 // TrustEvaluator checks whether a tool call is permitted.
@@ -182,13 +193,13 @@ type ContainerExecutor interface {
 
 // SandboxConfig holds per-agent Docker sandbox settings.
 type SandboxConfig struct {
-	Enabled      bool          `json:"enabled" yaml:"enabled"`
-	Image        string        `json:"image" yaml:"image"`
-	Network      string        `json:"network" yaml:"network"`
-	Memory       string        `json:"memory" yaml:"memory"`
-	CPU          float64       `json:"cpu" yaml:"cpu"`
+	Enabled      bool           `json:"enabled" yaml:"enabled"`
+	Image        string         `json:"image" yaml:"image"`
+	Network      string         `json:"network" yaml:"network"`
+	Memory       string         `json:"memory" yaml:"memory"`
+	CPU          float64        `json:"cpu" yaml:"cpu"`
 	Mounts       []SandboxMount `json:"mounts" yaml:"mounts"`
-	InitCommands []string      `json:"init" yaml:"init"`
+	InitCommands []string       `json:"init" yaml:"init"`
 }
 
 // SandboxMount is a bind mount for a sandbox container.
@@ -198,7 +209,9 @@ type SandboxMount struct {
 	ReadOnly bool   `json:"readonly" yaml:"readonly"`
 }
 
-// NullTrustEvaluator allows everything (no trust enforcement).
+// NullTrustEvaluator allows everything — intended for dev/testing only.
+// In production, configure a real TrustEvaluator. When Config.TrustEngine is nil,
+// the executor defaults to DenyAllTrustEvaluator for fail-safe behavior.
 type NullTrustEvaluator struct{}
 
 func (n *NullTrustEvaluator) Evaluate(_ context.Context, _ string, _ map[string]any) Action {
@@ -206,3 +219,13 @@ func (n *NullTrustEvaluator) Evaluate(_ context.Context, _ string, _ map[string]
 }
 func (n *NullTrustEvaluator) EvaluateCommand(_ string) Action { return ActionAllow }
 func (n *NullTrustEvaluator) EvaluatePath(_ string) Action    { return ActionAllow }
+
+// DenyAllTrustEvaluator denies every tool call. Used as the default when no TrustEngine
+// is configured, so missing configuration fails closed rather than open.
+type DenyAllTrustEvaluator struct{}
+
+func (d *DenyAllTrustEvaluator) Evaluate(_ context.Context, _ string, _ map[string]any) Action {
+	return ActionDeny
+}
+func (d *DenyAllTrustEvaluator) EvaluateCommand(_ string) Action { return ActionDeny }
+func (d *DenyAllTrustEvaluator) EvaluatePath(_ string) Action    { return ActionDeny }

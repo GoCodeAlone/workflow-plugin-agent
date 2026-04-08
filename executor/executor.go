@@ -105,6 +105,9 @@ func Execute(ctx context.Context, cfg Config, systemPrompt, userTask, agentID st
 	if cfg.RequestTimeout <= 0 {
 		cfg.RequestTimeout = 60 * time.Minute
 	}
+	// Track whether the caller configured a real Approver. A nil Approver means no
+	// approval system — trust-ask actions must be denied rather than auto-approved.
+	hasRealApprover := cfg.Approver != nil
 	if cfg.Approver == nil {
 		cfg.Approver = &NullApprover{}
 	}
@@ -120,10 +123,10 @@ func Execute(ctx context.Context, cfg Config, systemPrompt, userTask, agentID st
 	if cfg.Memory == nil {
 		cfg.Memory = &NullMemoryStore{}
 	}
-	// TrustEngine defaults to NullTrustEvaluator (fail-open / allow all).
-	// This is intentional for dev/testing. Replace with a real TrustEvaluator in production.
+	// TrustEngine defaults to DenyAllTrustEvaluator when nil — fail-closed, not open.
+	// Set cfg.TrustEngine = &NullTrustEvaluator{} explicitly for dev/testing environments.
 	if cfg.TrustEngine == nil {
-		cfg.TrustEngine = &NullTrustEvaluator{}
+		cfg.TrustEngine = &DenyAllTrustEvaluator{}
 	}
 
 	if cfg.Provider == nil {
@@ -332,23 +335,43 @@ func Execute(ctx context.Context, cfg Config, systemPrompt, userTask, agentID st
 						Content:   fmt.Sprintf("[TRUST DENY] %s by %s", tc.Name, agentID),
 					})
 				case ActionAsk:
-					// Block on human approval before allowing execution.
-					approvalID := uuid.New().String()
-					_ = cfg.Transcript.Record(ctx, TranscriptEntry{
-						ID:        approvalID,
-						AgentID:   agentID,
-						TaskID:    cfg.TaskID,
-						ProjectID: cfg.ProjectID,
-						Iteration: iterCount,
-						Role:      provider.RoleUser,
-						Content:   fmt.Sprintf("[TRUST ASK] %s by %s — waiting for human approval", tc.Name, agentID),
-					})
-					record, waitErr := cfg.Approver.WaitForResolution(ctx, approvalID, cfg.ApprovalTimeout)
-					if waitErr != nil || record == nil || record.Status != ApprovalApproved {
-						resultStr = fmt.Sprintf("Tool %q requires human approval (trust policy: ask) — not approved", tc.Name)
+					// Deny immediately when no real Approver is configured — fail-safe.
+					if !hasRealApprover {
+						resultStr = fmt.Sprintf("Tool %q denied: trust policy requires user approval but no Approver is configured", tc.Name)
 						isError = true
+						_ = cfg.Transcript.Record(ctx, TranscriptEntry{
+							ID:        uuid.New().String(),
+							AgentID:   agentID,
+							TaskID:    cfg.TaskID,
+							ProjectID: cfg.ProjectID,
+							Iteration: iterCount,
+							Role:      provider.RoleUser,
+							Content:   fmt.Sprintf("[TRUST DENY] %s by %s (ask, no approver)", tc.Name, agentID),
+						})
+					} else {
+						// Create an approval entry and block until a human resolves it.
+						approvalID, reqErr := cfg.Approver.Request(ctx, tc.Name, tc.Arguments)
+						if reqErr != nil {
+							resultStr = fmt.Sprintf("Tool %q denied: could not create approval request: %v", tc.Name, reqErr)
+							isError = true
+						} else {
+							_ = cfg.Transcript.Record(ctx, TranscriptEntry{
+								ID:        uuid.New().String(),
+								AgentID:   agentID,
+								TaskID:    cfg.TaskID,
+								ProjectID: cfg.ProjectID,
+								Iteration: iterCount,
+								Role:      provider.RoleUser,
+								Content:   fmt.Sprintf("[TRUST ASK] %s by %s — waiting for human approval (id=%s)", tc.Name, agentID, approvalID),
+							})
+							record, waitErr := cfg.Approver.WaitForResolution(ctx, approvalID, cfg.ApprovalTimeout)
+							if waitErr != nil || record == nil || record.Status != ApprovalApproved {
+								resultStr = fmt.Sprintf("Tool %q requires human approval (trust policy: ask) — not approved", tc.Name)
+								isError = true
+							}
+							// If approved, fall through to normal tool execution.
+						}
 					}
-					// If approved, fall through to normal tool execution.
 				}
 			}
 
