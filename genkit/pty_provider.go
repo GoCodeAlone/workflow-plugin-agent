@@ -597,6 +597,29 @@ func (p *ptyProvider) Close() error {
 	return nil
 }
 
+// RestartSession tears down the current PTY session so the next Stream() call
+// starts a fresh one. Used when trust mode changes require different CLI args.
+func (p *ptyProvider) RestartSession() error {
+	p.sessionMu.Lock()
+	defer p.sessionMu.Unlock()
+
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	if p.ptmx != nil {
+		_ = p.ptmx.Close()
+		p.ptmx = nil
+	}
+	if p.cmd != nil && p.cmd.Process != nil {
+		_ = p.cmd.Process.Kill()
+		_ = p.cmd.Wait()
+		p.cmd = nil
+	}
+	p.vt = nil
+	p.output.Reset()
+	return nil
+}
+
 // flattenMessages converts a []provider.Message into a single prompt string.
 // For CLI providers, we send the last user message as the prompt.
 func flattenMessages(messages []provider.Message) string {

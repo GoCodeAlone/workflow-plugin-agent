@@ -57,7 +57,9 @@ func parseResponseDefault(raw string) string {
 // ── Claude Code ──────────────────────────────────────────────────────────────
 
 // ClaudeCodeAdapter drives the `claude` CLI.
-type ClaudeCodeAdapter struct{}
+type ClaudeCodeAdapter struct {
+	ExtraArgs []string // configurable interactive args; overrides default when non-empty
+}
 
 func (ClaudeCodeAdapter) Name() string { return "claude_code" }
 func (ClaudeCodeAdapter) Binary() string { return "claude" }
@@ -87,7 +89,10 @@ func (ClaudeCodeAdapter) ParseResponse(raw string) string {
 }
 
 func (ClaudeCodeAdapter) SupportsInteractivePTY() bool { return true }
-func (ClaudeCodeAdapter) InteractiveArgs() []string {
+func (a ClaudeCodeAdapter) InteractiveArgs() []string {
+	if len(a.ExtraArgs) > 0 {
+		return a.ExtraArgs
+	}
 	return []string{"--permission-mode", "acceptEdits"}
 }
 
@@ -134,7 +139,9 @@ func noParseStreamEvent(_ string) (string, bool) { return "", false }
 // ── Copilot CLI ───────────────────────────────────────────────────────────────
 
 // CopilotCLIAdapter drives the `copilot` CLI.
-type CopilotCLIAdapter struct{}
+type CopilotCLIAdapter struct {
+	ExtraArgs []string // configurable interactive args; overrides default when non-empty
+}
 
 func (CopilotCLIAdapter) Name() string { return "copilot_cli" }
 func (CopilotCLIAdapter) Binary() string { return "copilot" }
@@ -322,7 +329,10 @@ func (CopilotCLIAdapter) ParseStreamEvent(_ string) (string, bool) { return "", 
 
 // SupportsInteractivePTY returns true — Copilot uses vt10x with screen-diff extraction.
 func (CopilotCLIAdapter) SupportsInteractivePTY() bool { return true }
-func (CopilotCLIAdapter) InteractiveArgs() []string {
+func (a CopilotCLIAdapter) InteractiveArgs() []string {
+	if len(a.ExtraArgs) > 0 {
+		return a.ExtraArgs
+	}
 	return []string{"--allow-all"}
 }
 
