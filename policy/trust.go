@@ -302,6 +302,7 @@ func matchCommandPattern(pattern, cmd string) bool {
 
 // matchPathPattern checks if a rule pattern matches a file path.
 // Patterns with ~ are expanded to the user's home directory.
+// Supports * and ** globs via GlobMatcher's matchGlob.
 func matchPathPattern(pattern, path string) bool {
 	if !strings.HasPrefix(pattern, "path:") {
 		return false
@@ -314,11 +315,7 @@ func matchPathPattern(pattern, path string) bool {
 			pathPattern = home + pathPattern[1:]
 		}
 	}
-	if strings.HasSuffix(pathPattern, "*") {
-		prefix := strings.TrimSuffix(pathPattern, "*")
-		return strings.HasPrefix(path, prefix)
-	}
-	return pathPattern == path
+	return matchGlob(pathPattern, path)
 }
 
 // ruleMatchesScope returns true if the rule applies to the given scope.
