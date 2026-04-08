@@ -120,6 +120,11 @@ func Execute(ctx context.Context, cfg Config, systemPrompt, userTask, agentID st
 	if cfg.Memory == nil {
 		cfg.Memory = &NullMemoryStore{}
 	}
+	// TrustEngine defaults to NullTrustEvaluator (fail-open / allow all).
+	// This is intentional for dev/testing. Replace with a real TrustEvaluator in production.
+	if cfg.TrustEngine == nil {
+		cfg.TrustEngine = &NullTrustEvaluator{}
+	}
 
 	if cfg.Provider == nil {
 		return nil, fmt.Errorf("executor: Provider is required")
@@ -296,7 +301,7 @@ func Execute(ctx context.Context, cfg Config, systemPrompt, userTask, agentID st
 			})
 
 			// Trust evaluation: check if the tool call is permitted.
-			if cfg.TrustEngine != nil && !isError {
+			if !isError {
 				trustAction := cfg.TrustEngine.Evaluate(ctx, tc.Name, tc.Arguments)
 
 				if (tc.Name == "shell_exec" || tc.Name == "bash") && trustAction == ActionAllow {
@@ -327,17 +332,23 @@ func Execute(ctx context.Context, cfg Config, systemPrompt, userTask, agentID st
 						Content:   fmt.Sprintf("[TRUST DENY] %s by %s", tc.Name, agentID),
 					})
 				case ActionAsk:
-					resultStr = fmt.Sprintf("Tool %q requires human approval (trust policy: ask)", tc.Name)
-					isError = true
+					// Block on human approval before allowing execution.
+					approvalID := uuid.New().String()
 					_ = cfg.Transcript.Record(ctx, TranscriptEntry{
-						ID:        uuid.New().String(),
+						ID:        approvalID,
 						AgentID:   agentID,
 						TaskID:    cfg.TaskID,
 						ProjectID: cfg.ProjectID,
 						Iteration: iterCount,
 						Role:      provider.RoleUser,
-						Content:   fmt.Sprintf("[TRUST ASK] %s by %s", tc.Name, agentID),
+						Content:   fmt.Sprintf("[TRUST ASK] %s by %s — waiting for human approval", tc.Name, agentID),
 					})
+					record, waitErr := cfg.Approver.WaitForResolution(ctx, approvalID, cfg.ApprovalTimeout)
+					if waitErr != nil || record == nil || record.Status != ApprovalApproved {
+						resultStr = fmt.Sprintf("Tool %q requires human approval (trust policy: ask) — not approved", tc.Name)
+						isError = true
+					}
+					// If approved, fall through to normal tool execution.
 				}
 			}
 
@@ -352,7 +363,15 @@ func Execute(ctx context.Context, cfg Config, systemPrompt, userTask, agentID st
 					// Sandbox mode: route bash/shell tools through container.
 					if cfg.SandboxMode && cfg.ContainerMgr != nil && cfg.ContainerMgr.IsAvailable() &&
 						(tc.Name == "shell_exec" || tc.Name == "bash") {
-						if cmdStr, ok := tc.Arguments["command"].(string); ok {
+						// Ensure the container is provisioned before executing.
+						spec := SandboxConfig{}
+						if cfg.SandboxSpec != nil {
+							spec = *cfg.SandboxSpec
+						}
+						if _, ensureErr := cfg.ContainerMgr.EnsureContainer(ctx, cfg.ProjectID, "/workspace", spec); ensureErr != nil {
+							resultStr = fmt.Sprintf("Error (sandbox): failed to ensure container: %v", ensureErr)
+							isError = true
+						} else if cmdStr, ok := tc.Arguments["command"].(string); ok {
 							stdout, stderr, exitCode, execErr := cfg.ContainerMgr.ExecInContainer(
 								ctx, cfg.ProjectID, cmdStr, "/workspace", 60,
 							)

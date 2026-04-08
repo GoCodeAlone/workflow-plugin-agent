@@ -6,6 +6,8 @@ import (
 	"database/sql"
 	"fmt"
 	"io"
+	"log"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -86,13 +88,18 @@ func NewContainerManager(db *sql.DB) *ContainerManager {
 		// Load existing containers into cache
 		rows, err := db.Query("SELECT project_id, container_id FROM workspace_containers WHERE status = 'running'")
 		if err == nil {
-			defer func() { _ = rows.Close() }()
-			for rows.Next() {
-				var pid, cid string
-				if rows.Scan(&pid, &cid) == nil {
-					cm.containers[pid] = cid
+			func() {
+				defer func() { _ = rows.Close() }()
+				for rows.Next() {
+					var pid, cid string
+					if rows.Scan(&pid, &cid) == nil {
+						cm.containers[pid] = cid
+					}
 				}
-			}
+				if err := rows.Err(); err != nil {
+					log.Printf("container_manager: error loading container cache: %v", err)
+				}
+			}()
 		}
 	}
 
@@ -155,6 +162,9 @@ func (cm *ContainerManager) EnsureContainer(ctx context.Context, projectID, work
 		},
 	}
 	for _, m := range spec.Mounts {
+		if err := validateMountPaths(m.Source, m.Target); err != nil {
+			return "", fmt.Errorf("container manager: invalid mount: %w", err)
+		}
 		mounts = append(mounts, mount.Mount{
 			Type:     mount.TypeBind,
 			Source:   m.Source,
@@ -203,8 +213,7 @@ func (cm *ContainerManager) EnsureContainer(ctx context.Context, projectID, work
 	for _, initCmd := range spec.InitCommands {
 		_, _, _, err := cm.execInContainerLocked(ctx, resp.ID, initCmd, "/workspace", 60)
 		if err != nil {
-			// Log but don't fail — init commands are best-effort
-			continue
+			log.Printf("container_manager: init command %q failed: %v", initCmd, err)
 		}
 	}
 
@@ -390,4 +399,22 @@ func (cm *ContainerManager) ensureImage(ctx context.Context, img string) error {
 	defer func() { _ = reader.Close() }()
 	_, err = io.Copy(io.Discard, reader)
 	return err
+}
+
+// validateMountPaths checks that a bind mount source and target are safe.
+// Source must be an absolute path. Target must not be a critical system directory.
+func validateMountPaths(source, target string) error {
+	if !filepath.IsAbs(source) {
+		return fmt.Errorf("mount source must be an absolute path: %q", source)
+	}
+	if !filepath.IsAbs(target) {
+		return fmt.Errorf("mount target must be an absolute path: %q", target)
+	}
+	cleanTarget := filepath.Clean(target)
+	for _, critical := range []string{"/", "/etc", "/bin", "/usr", "/lib", "/lib64", "/sbin", "/sys", "/proc", "/dev"} {
+		if cleanTarget == critical {
+			return fmt.Errorf("mount target %q is a critical system path", cleanTarget)
+		}
+	}
+	return nil
 }

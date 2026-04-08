@@ -3,6 +3,7 @@ package policy
 import (
 	"database/sql"
 	"fmt"
+	"log"
 	"time"
 )
 
@@ -41,17 +42,27 @@ func NewPermissionStore(db *sql.DB) (*PermissionStore, error) {
 	return &PermissionStore{db: db}, nil
 }
 
-// Grant persists an allow/deny decision. Upserts by pattern+scope.
+// Grant persists an allow/deny decision. Upserts by pattern+scope atomically.
 func (ps *PermissionStore) Grant(pattern string, action Action, scope, grantedBy string) error {
-	_, _ = ps.db.Exec(
+	tx, err := ps.db.Begin()
+	if err != nil {
+		return fmt.Errorf("permission store: begin transaction: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	if _, err := tx.Exec(
 		"DELETE FROM permission_grants WHERE pattern = ? AND scope = ?",
 		pattern, scope,
-	)
-	_, err := ps.db.Exec(
+	); err != nil {
+		return fmt.Errorf("permission store: delete existing grant: %w", err)
+	}
+	if _, err := tx.Exec(
 		"INSERT INTO permission_grants (pattern, action, scope, granted_by) VALUES (?, ?, ?, ?)",
 		pattern, string(action), scope, grantedBy,
-	)
-	return err
+	); err != nil {
+		return fmt.Errorf("permission store: insert grant: %w", err)
+	}
+	return tx.Commit()
 }
 
 // Revoke removes a persisted grant.
@@ -71,6 +82,7 @@ func (ps *PermissionStore) Check(toolName, scope string) (Action, bool) {
 	query := `SELECT pattern, action FROM permission_grants WHERE scope = ? OR scope = 'global'`
 	rows, err := ps.db.Query(query, scope)
 	if err != nil {
+		log.Printf("permission store: check query: %v", err)
 		return "", false
 	}
 	defer func() { _ = rows.Close() }()
@@ -122,8 +134,25 @@ func (ps *PermissionStore) List() ([]PermissionGrant, error) {
 		if err := rows.Scan(&g.ID, &g.Pattern, &g.Action, &g.Scope, &g.GrantedBy, &createdAt); err != nil {
 			return nil, err
 		}
-		g.CreatedAt, _ = time.Parse("2006-01-02 15:04:05", createdAt)
+		if g.CreatedAt, err = parseCreatedAt(createdAt); err != nil {
+			return nil, fmt.Errorf("permission store: parse created_at %q: %w", createdAt, err)
+		}
 		grants = append(grants, g)
 	}
 	return grants, rows.Err()
+}
+
+// parseCreatedAt parses SQLite datetime strings in multiple formats.
+func parseCreatedAt(s string) (time.Time, error) {
+	formats := []string{
+		time.RFC3339,
+		"2006-01-02 15:04:05",
+		"2006-01-02T15:04:05",
+	}
+	for _, f := range formats {
+		if t, err := time.Parse(f, s); err == nil {
+			return t, nil
+		}
+	}
+	return time.Time{}, fmt.Errorf("unrecognized datetime format: %q", s)
 }

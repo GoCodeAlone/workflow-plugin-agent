@@ -176,7 +176,7 @@ type TrustEvaluator interface {
 // ContainerExecutor can run commands inside a Docker container.
 type ContainerExecutor interface {
 	IsAvailable() bool
-	EnsureContainer(ctx context.Context, projectID, workspacePath string, spec any) (string, error)
+	EnsureContainer(ctx context.Context, projectID, workspacePath string, spec SandboxConfig) (string, error)
 	ExecInContainer(ctx context.Context, projectID, command, workDir string, timeout int) (stdout, stderr string, exitCode int, err error)
 }
 
