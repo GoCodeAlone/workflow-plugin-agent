@@ -64,7 +64,8 @@ type ptyProvider struct {
 	ptmx      *os.File       // PTY master — nil when no active session
 	cmd       *exec.Cmd      // running CLI process
 	vt        vt10x.Terminal // virtual terminal screen buffer
-	output    bytes.Buffer   // raw output accumulator (for fallback parsing)
+	output        bytes.Buffer   // raw output accumulator (for fallback parsing)
+	promptHandler *PromptHandler // auto-responds to known screen prompts
 }
 
 // Name implements provider.Provider.
@@ -257,6 +258,13 @@ func (p *ptyProvider) startSession() error {
 	return nil
 }
 
+// SetPromptHandler attaches a PromptHandler for auto-responding to screen prompts.
+func (p *ptyProvider) SetPromptHandler(ph *PromptHandler) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.promptHandler = ph
+}
+
 // waitForPrompt polls the virtual terminal screen until the adapter's DetectPrompt returns true.
 // Also auto-handles trust prompts by pressing Enter.
 func (p *ptyProvider) waitForPrompt(ctx context.Context, ptmx *os.File, deadline time.Time) error {
@@ -271,13 +279,22 @@ func (p *ptyProvider) waitForPrompt(ctx context.Context, ptmx *os.File, deadline
 		screen := p.vt.String()
 		lower := strings.ToLower(screen)
 
-		// Auto-handle trust/safety prompts before checking for the actual input prompt.
-		// Both Claude Code and Copilot show trust dialogs on first use in a directory.
-		if (strings.Contains(lower, "trust") || strings.Contains(lower, "safety check")) &&
-			(strings.Contains(screen, "Yes") || strings.Contains(screen, "Enter to confirm") || strings.Contains(screen, "Enter to select")) {
-			ptmx.Write([]byte{'\r'})
-			time.Sleep(2 * time.Second)
-			continue
+		// Auto-handle prompts via PromptHandler (trust dialogs, permission prompts, etc.).
+		if p.promptHandler != nil {
+			action, response := p.promptHandler.Evaluate(screen)
+			if action == PromptActionRespond && response != "" {
+				ptmx.Write([]byte(response))
+				time.Sleep(2 * time.Second)
+				continue
+			}
+		} else {
+			// Fallback: hardcoded trust dialog handling when no PromptHandler is configured.
+			if (strings.Contains(lower, "trust") || strings.Contains(lower, "safety check")) &&
+				(strings.Contains(screen, "Yes") || strings.Contains(screen, "Enter to confirm") || strings.Contains(screen, "Enter to select")) {
+				ptmx.Write([]byte{'\r'})
+				time.Sleep(2 * time.Second)
+				continue
+			}
 		}
 
 		// Only detect the actual input prompt if we're NOT in a trust/dialog screen.
