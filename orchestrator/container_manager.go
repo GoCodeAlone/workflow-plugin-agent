@@ -17,6 +17,13 @@ import (
 	"github.com/docker/docker/pkg/stdcopy"
 )
 
+// MountSpec describes a single bind mount.
+type MountSpec struct {
+	Source   string `json:"source"`
+	Target   string `json:"target"`
+	ReadOnly bool   `json:"readonly,omitempty"`
+}
+
 // WorkspaceSpec describes the container configuration for a project workspace.
 type WorkspaceSpec struct {
 	Image        string            `json:"image"`
@@ -25,6 +32,7 @@ type WorkspaceSpec struct {
 	MemoryLimit  int64             `json:"memory_limit,omitempty"`
 	CPULimit     float64           `json:"cpu_limit,omitempty"`
 	NetworkMode  string            `json:"network_mode,omitempty"`
+	Mounts       []MountSpec       `json:"mounts,omitempty"`
 }
 
 // ContainerManager manages Docker containers for project workspaces.
@@ -139,14 +147,23 @@ func (cm *ContainerManager) EnsureContainer(ctx context.Context, projectID, work
 		WorkingDir: "/workspace",
 	}
 
-	hostCfg := &container.HostConfig{
-		Mounts: []mount.Mount{
-			{
-				Type:   mount.TypeBind,
-				Source: workspacePath,
-				Target: "/workspace",
-			},
+	mounts := []mount.Mount{
+		{
+			Type:   mount.TypeBind,
+			Source: workspacePath,
+			Target: "/workspace",
 		},
+	}
+	for _, m := range spec.Mounts {
+		mounts = append(mounts, mount.Mount{
+			Type:     mount.TypeBind,
+			Source:   m.Source,
+			Target:   m.Target,
+			ReadOnly: m.ReadOnly,
+		})
+	}
+	hostCfg := &container.HostConfig{
+		Mounts: mounts,
 	}
 	if spec.MemoryLimit > 0 {
 		hostCfg.Memory = spec.MemoryLimit
