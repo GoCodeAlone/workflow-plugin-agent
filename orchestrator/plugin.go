@@ -337,15 +337,7 @@ func toolRegistryHook() plugin.WiringHook {
 				}
 			}
 
-			// Determine default workspace for file tools.
-			// AGENT_WORKSPACE env var takes priority, then cwd, then temp dir.
-			workspace := os.Getenv("AGENT_WORKSPACE")
-			if workspace == "" {
-				workspace, _ = os.Getwd()
-			}
-			if workspace == "" {
-				workspace = os.TempDir()
-			}
+			workspace := resolveFileToolWorkspace()
 
 			// Register built-in file and shell tools
 			registry.Register(&tools.FileReadTool{Workspace: workspace})
@@ -782,4 +774,16 @@ func blackboardHook() plugin.WiringHook {
 			return nil
 		},
 	}
+}
+
+// resolveFileToolWorkspace returns the workspace directory for file tools.
+// Priority: AGENT_WORKSPACE env var → process cwd → os.TempDir().
+func resolveFileToolWorkspace() string {
+	if ws := os.Getenv("AGENT_WORKSPACE"); ws != "" {
+		return ws
+	}
+	if cwd, err := os.Getwd(); err == nil && cwd != "" {
+		return cwd
+	}
+	return os.TempDir()
 }

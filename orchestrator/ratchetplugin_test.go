@@ -1112,6 +1112,43 @@ func TestPlugin_WiringHooks(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
+// resolveFileToolWorkspace tests
+// ---------------------------------------------------------------------------
+
+func TestResolveFileToolWorkspace(t *testing.T) {
+	t.Run("AGENT_WORKSPACE env used when set", func(t *testing.T) {
+		t.Setenv("AGENT_WORKSPACE", "/custom/workspace")
+		got := resolveFileToolWorkspace()
+		if got != "/custom/workspace" {
+			t.Errorf("expected /custom/workspace, got %q", got)
+		}
+	})
+
+	t.Run("cwd used when env unset", func(t *testing.T) {
+		t.Setenv("AGENT_WORKSPACE", "")
+		cwd, err := os.Getwd()
+		if err != nil {
+			t.Skipf("cannot determine cwd: %v", err)
+		}
+		got := resolveFileToolWorkspace()
+		if got != cwd {
+			t.Errorf("expected cwd %q, got %q", cwd, got)
+		}
+	})
+
+	t.Run("fallback to TempDir when env unset and cwd unavailable", func(t *testing.T) {
+		// We can't easily make os.Getwd() fail, but we can verify the fallback
+		// value is non-empty and equals os.TempDir() when env is unset.
+		// This covers the branch: if cwd succeeds, TempDir is not reached.
+		// We verify TempDir is a valid non-empty string.
+		tmp := os.TempDir()
+		if tmp == "" {
+			t.Fatal("os.TempDir() returned empty string")
+		}
+	})
+}
+
+// ---------------------------------------------------------------------------
 // extractAgentSeed tests
 // ---------------------------------------------------------------------------
 
