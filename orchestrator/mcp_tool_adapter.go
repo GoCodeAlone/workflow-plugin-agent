@@ -17,6 +17,7 @@ import (
 // use either type interchangeably.
 type MCPProvider interface {
 	ListTools() []string
+	ListToolSchemas() []wfmcp.ToolSchema
 	CallTool(ctx context.Context, toolName string, args map[string]any) (any, error)
 }
 
@@ -24,9 +25,11 @@ type MCPProvider interface {
 // the ToolRegistry. The tool name is exposed as "mcp_wfctl_<toolName>" so it
 // cannot collide with native tools or external MCP-client tools.
 type inProcessMCPToolAdapter struct {
-	serverName string
-	toolName   string
-	provider   MCPProvider
+	serverName  string
+	toolName    string
+	description string
+	schema      map[string]any // JSON Schema for parameters
+	provider    MCPProvider
 }
 
 // Name returns the raw tool name. The ToolRegistry's RegisterMCP method will
@@ -36,19 +39,26 @@ func (a *inProcessMCPToolAdapter) Name() string {
 	return a.toolName
 }
 
-// Description returns a generic description referencing the originating server.
+// Description returns the tool description from the MCP schema, or a generic one.
 func (a *inProcessMCPToolAdapter) Description() string {
+	if a.description != "" {
+		return a.description
+	}
 	return fmt.Sprintf("MCP tool %q from server %q", a.toolName, a.serverName)
 }
 
-// Definition returns a ToolDef with the tool name and description.
-// Parameter schema is left empty because the underlying MCP tools enforce
-// their own schema at invocation time.
+// Definition returns a ToolDef with the tool name, description, and parameter
+// schema from the MCP tool's registration. This allows LLMs to know what
+// arguments each tool accepts.
 func (a *inProcessMCPToolAdapter) Definition() provider.ToolDef {
+	params := a.schema
+	if params == nil {
+		params = map[string]any{"type": "object", "properties": map[string]any{}}
+	}
 	return provider.ToolDef{
 		Name:        a.toolName,
 		Description: a.Description(),
-		Parameters:  map[string]any{"type": "object", "properties": map[string]any{}},
+		Parameters:  params,
 	}
 }
 
@@ -104,16 +114,18 @@ func mcpToolsHook() plugin.WiringHook {
 	}
 }
 
-// registerMCPProviderTools lists all tools from the provider and registers
-// them in the ToolRegistry as inProcessMCPToolAdapter instances.
+// registerMCPProviderTools lists all tools from the provider with their
+// schemas and registers them in the ToolRegistry.
 func registerMCPProviderTools(registry *ToolRegistry, serverName string, prov MCPProvider, app modular.Application) {
-	tools := prov.ListTools()
+	schemas := prov.ListToolSchemas()
 	var adapted []ratchetplugin.Tool
-	for _, name := range tools {
+	for _, ts := range schemas {
 		adapted = append(adapted, &inProcessMCPToolAdapter{
-			serverName: serverName,
-			toolName:   name,
-			provider:   prov,
+			serverName:  serverName,
+			toolName:    ts.Name,
+			description: ts.Description,
+			schema:      ts.InputSchema,
+			provider:    prov,
 		})
 	}
 	registry.RegisterMCP(serverName, adapted)

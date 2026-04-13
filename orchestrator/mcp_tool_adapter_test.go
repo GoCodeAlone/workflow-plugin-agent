@@ -5,6 +5,8 @@ import (
 	"errors"
 	"strings"
 	"testing"
+
+	wfmcp "github.com/GoCodeAlone/workflow/mcp"
 )
 
 // mockMCPProvider is a test double for MCPProvider.
@@ -15,6 +17,20 @@ type mockMCPProvider struct {
 }
 
 func (m *mockMCPProvider) ListTools() []string { return m.tools }
+
+func (m *mockMCPProvider) ListToolSchemas() []wfmcp.ToolSchema {
+	schemas := make([]wfmcp.ToolSchema, len(m.tools))
+	for i, name := range m.tools {
+		schemas[i] = wfmcp.ToolSchema{
+			Name:        name,
+			Description: "Mock tool: " + name,
+			InputSchema: map[string]any{"type": "object", "properties": map[string]any{
+				"yaml_content": map[string]any{"type": "string"},
+			}},
+		}
+	}
+	return schemas
+}
 
 func (m *mockMCPProvider) CallTool(_ context.Context, toolName string, _ map[string]any) (any, error) {
 	if err, ok := m.errs[toolName]; ok {

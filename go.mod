@@ -4,7 +4,7 @@ go 1.26.0
 
 require (
 	github.com/GoCodeAlone/modular v1.13.0
-	github.com/GoCodeAlone/workflow v0.10.1
+	github.com/GoCodeAlone/workflow v0.10.2
 	github.com/GoCodeAlone/workflow-plugin-authz v0.2.2
 	github.com/anthropics/anthropic-sdk-go v1.26.0
 	github.com/aws/aws-sdk-go-v2 v1.41.5
@@ -53,7 +53,6 @@ require (
 	github.com/GoCodeAlone/modular/modules/eventbus/v2 v2.8.0 // indirect
 	github.com/GoCodeAlone/modular/modules/jsonschema v1.15.0 // indirect
 	github.com/GoCodeAlone/modular/modules/reverseproxy/v2 v2.8.0 // indirect
-	github.com/GoCodeAlone/modular/modules/scheduler v1.14.0 // indirect
 	github.com/GoCodeAlone/yaegi v0.17.2 // indirect
 	github.com/GoogleCloudPlatform/opentelemetry-operations-go/detectors/gcp v1.32.0 // indirect
 	github.com/GoogleCloudPlatform/opentelemetry-operations-go/exporter/metric v0.55.0 // indirect
@@ -252,7 +251,6 @@ require (
 	go.uber.org/multierr v1.11.0 // indirect
 	go.uber.org/zap v1.27.1 // indirect
 	go.yaml.in/yaml/v2 v2.4.4 // indirect
-	golang.org/x/exp v0.0.0-20260312153236-7ab1446f8b90 // indirect
 	golang.org/x/mod v0.34.0 // indirect
 	golang.org/x/net v0.53.0 // indirect
 	golang.org/x/oauth2 v0.36.0 // indirect
