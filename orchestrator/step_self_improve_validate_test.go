@@ -93,6 +93,37 @@ func TestSelfImproveValidateStep_ImmutabilityViolation(t *testing.T) {
 	}
 }
 
+func TestSelfImproveValidateStep_EmptyProposedYAML(t *testing.T) {
+	app := newMockApp()
+	step := &SelfImproveValidateStep{name: "test-validate", app: app}
+
+	cases := []struct {
+		name  string
+		value string
+	}{
+		{"empty string", ""},
+		{"whitespace only", "   \n\t  "},
+		{"no value template", "<no value>"},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			pc := &module.PipelineContext{
+				Current: map[string]any{
+					"proposed_yaml": tc.value,
+				},
+			}
+			_, err := step.Execute(context.Background(), pc)
+			if err == nil {
+				t.Errorf("expected error for proposed_yaml=%q, got nil", tc.value)
+			}
+			if err != nil && !strings.Contains(err.Error(), "proposed_yaml is empty or not set") {
+				t.Errorf("unexpected error message: %v", err)
+			}
+		})
+	}
+}
+
 func TestSelfImproveValidateStep_MCPUnavailable(t *testing.T) {
 	app := newMockApp() // no mcp.provider
 	step := &SelfImproveValidateStep{name: "test-validate", app: app}

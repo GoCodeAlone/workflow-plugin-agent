@@ -43,8 +43,8 @@ func (s *SelfImproveValidateStep) Execute(ctx context.Context, pc *module.Pipeli
 	}
 
 	proposedYAML := extractString(pc.Current, proposedKey, "")
-	if proposedYAML == "" {
-		return nil, fmt.Errorf("self_improve_validate step %q: %q is required", s.name, proposedKey)
+	if strings.TrimSpace(proposedYAML) == "" || proposedYAML == "<no value>" {
+		return nil, fmt.Errorf("self_improve_validate step %q: proposed_yaml is empty or not set", s.name)
 	}
 	currentYAML := extractString(pc.Current, currentKey, "")
 
