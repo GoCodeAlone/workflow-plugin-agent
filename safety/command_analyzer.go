@@ -158,17 +158,8 @@ func (a *CommandAnalyzer) Analyze(cmd string) (*CommandVerdict, error) {
 }
 
 func (a *CommandAnalyzer) checkDestructive(v *CommandVerdict, fullCmd, cmdName string) {
-	for _, pattern := range a.policy.BlockedPatterns {
-		if strings.Contains(fullCmd, pattern) {
-			v.Risks = append(v.Risks, Risk{
-				Type:        "destructive",
-				Description: fmt.Sprintf("matches blocked pattern %q", pattern),
-				Command:     fullCmd,
-			})
-			return
-		}
-	}
-	// Always block well-known disk-wiping commands regardless of policy patterns.
+	// BlockedPatterns are already checked against the full raw command before parsing;
+	// only check well-known destructive binaries here to avoid duplicate risk entries.
 	alwaysDestructive := map[string]bool{"mkfs": true, "fdisk": true, "wipefs": true}
 	if alwaysDestructive[cmdName] {
 		v.Risks = append(v.Risks, Risk{
@@ -288,7 +279,7 @@ func (a *CommandAnalyzer) checkVariableExpansion(v *CommandVerdict, sq *syntax.S
 
 func (a *CommandAnalyzer) isAllowed(cmd string) bool {
 	for _, allowed := range a.policy.AllowedCommands {
-		if cmd == allowed || strings.HasPrefix(cmd, allowed) {
+		if cmd == allowed {
 			return true
 		}
 	}

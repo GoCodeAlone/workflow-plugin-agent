@@ -178,6 +178,46 @@ func TestAnalyzer_DisabledMode(t *testing.T) {
 	}
 }
 
+func TestAnalyzer_NoDuplicateRisks(t *testing.T) {
+	a := NewCommandAnalyzer(DefaultPolicy())
+	v, err := a.Analyze("rm -rf /")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if v.Safe {
+		t.Fatal("expected unsafe")
+	}
+	// Count destructive risks — must be exactly 1, not 2.
+	count := 0
+	for _, r := range v.Risks {
+		if r.Type == "destructive" {
+			count++
+		}
+	}
+	if count != 1 {
+		t.Errorf("expected exactly 1 destructive risk, got %d (risks: %v)", count, v.Risks)
+	}
+}
+
+func TestAnalyzer_AllowlistNoHasPrefixBypass(t *testing.T) {
+	// "golang-migrate" must NOT be allowed when "go" is in the allowlist.
+	policy := Policy{
+		Mode:            ModeAllowlist,
+		AllowedCommands: []string{"go", "wfctl"},
+	}
+	a := NewCommandAnalyzer(policy)
+
+	v, _ := a.Analyze("golang-migrate up")
+	if v.Safe {
+		t.Error("expected 'golang-migrate' to be blocked when only 'go' is allowlisted (HasPrefix bypass)")
+	}
+
+	v, _ = a.Analyze("go test ./...")
+	if !v.Safe {
+		t.Errorf("expected 'go' to be allowed, reason: %s", v.Reason)
+	}
+}
+
 func TestAnalyzer_BlocklistMode(t *testing.T) {
 	policy := Policy{
 		Mode:             ModeBlocklist,
