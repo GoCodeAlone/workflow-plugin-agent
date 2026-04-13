@@ -120,6 +120,8 @@ func (s *AgentExecuteStep) Execute(ctx context.Context, pc *module.PipelineConte
 	if svc, ok := s.app.SvcRegistry()["ratchet-container-manager"]; ok {
 		containerMgr, _ = svc.(*ContainerManager)
 	}
+	// Look up guardrails module (optional). If present, tool calls are checked before execution.
+	guardrails := findGuardrailsModule(s.app)
 
 	// Extract agent and task data from pc.Current.
 	// The find-pending-task db_query step returns data under a "row" key,
@@ -348,18 +350,37 @@ func (s *AgentExecuteStep) Execute(ctx context.Context, pc *module.PipelineConte
 		for _, tc := range resp.ToolCalls {
 			var resultStr string
 			var isError bool
-			if toolRegistry != nil {
-				result, execErr := toolRegistry.Execute(toolCtx, tc.Name, tc.Arguments)
-				if execErr != nil {
-					resultStr = fmt.Sprintf("Error: %v", execErr)
+
+			// Guardrails check: validate tool access and command safety before execution.
+			if guardrails != nil {
+				action := guardrails.Evaluate(toolCtx, tc.Name, tc.Arguments)
+				if string(action) == "deny" {
+					resultStr = fmt.Sprintf("guardrails: tool %q is not permitted", tc.Name)
 					isError = true
-				} else {
-					resultBytes, _ := json.Marshal(result)
-					resultStr = string(resultBytes)
+				} else if cmdStr, _ := tc.Arguments["command"].(string); cmdStr != "" {
+					// For shell/bash tools, also check command safety.
+					cmdAction := guardrails.EvaluateCommand(cmdStr)
+					if string(cmdAction) == "deny" {
+						resultStr = fmt.Sprintf("guardrails: command blocked by safety policy")
+						isError = true
+					}
 				}
-			} else {
-				resultStr = "Tool execution not available"
-				isError = true
+			}
+
+			if !isError {
+				if toolRegistry != nil {
+					result, execErr := toolRegistry.Execute(toolCtx, tc.Name, tc.Arguments)
+					if execErr != nil {
+						resultStr = fmt.Sprintf("Error: %v", execErr)
+						isError = true
+					} else {
+						resultBytes, _ := json.Marshal(result)
+						resultStr = string(resultBytes)
+					}
+				} else {
+					resultStr = "Tool execution not available"
+					isError = true
+				}
 			}
 
 			// Handle approval gates: if the tool was request_approval, pause and wait.
@@ -556,6 +577,17 @@ func findSSEHub(app modular.Application) *SSEHub {
 	for _, svc := range app.SvcRegistry() {
 		if hub, ok := svc.(*SSEHub); ok {
 			return hub
+		}
+	}
+	return nil
+}
+
+// findGuardrailsModule searches the service registry for a GuardrailsModule instance.
+// Returns nil if no guardrails module is registered.
+func findGuardrailsModule(app modular.Application) *GuardrailsModule {
+	for _, svc := range app.SvcRegistry() {
+		if gm, ok := svc.(*GuardrailsModule); ok {
+			return gm
 		}
 	}
 	return nil
