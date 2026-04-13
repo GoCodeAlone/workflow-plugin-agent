@@ -505,4 +505,66 @@ audit (agent) → blackboard → plan (agent) → validate → deploy → blackb
 
 Each phase posts to the blackboard with a distinct phase tag (`phase: audit`, `phase: plan`, etc.), giving an auditable trail of what the agent observed, decided, and verified.
 
+---
+
+## Context Management
+
+Agentic loops accumulate conversation history rapidly — tool results often include full YAML files, and 44+ tool definitions add constant overhead. Without context management, local models like Gemma 4 (7.2 GB) exhaust the 16 GB KV cache by iteration 2.
+
+### Compaction (default: 80%)
+
+`step.agent_execute` automatically compacts the conversation when it approaches the model's context window:
+
+```yaml
+- name: improve
+  type: step.agent_execute
+  config:
+    provider_service: ai
+    max_iterations: 10
+    context:
+      compaction_threshold: 0.80   # default; omit to keep this value
+```
+
+When compaction triggers, the executor calls the LLM to summarise the middle portion of the conversation, then replaces it with the summary plus the most recent exchanges. The agent continues without losing its goal or recent context.
+
+Set `compaction_threshold: 0` to disable compaction entirely (not recommended for local models).
+
+### context_window for Ollama (num_ctx)
+
+For Ollama models, set `context_window` to limit KV cache memory allocation. This maps directly to Ollama's `num_ctx` parameter and also tells the compaction logic the accurate token budget:
+
+```yaml
+- name: ai
+  type: agent.provider
+  config:
+    provider: ollama
+    model: gemma4:e2b
+    base_url: "${OLLAMA_BASE_URL:-http://ollama:11434}"
+    max_tokens: 8192
+    context_window: 16384   # sets Ollama num_ctx; limits KV cache to ~2 GB
+```
+
+Without `context_window`, Ollama allocates KV cache based on the model's default context length, which can be 128K+ tokens even for small quantized models.
+
+**Recommended values for common models on 16 GB machines:**
+
+| Model | Suggested context_window |
+|-------|--------------------------|
+| gemma4:e2b | 16384 |
+| qwen3:8b | 32768 |
+| llama3.3:70b (Q4) | 8192 |
+| phi4 | 16384 |
+
+### Tool Filtering (automatic)
+
+When an `agent.guardrails` module is configured with `allowed_tools`, only matching tool definitions are sent to the LLM on each `Chat()` call. This reduces per-call token overhead and prevents the model from hallucinating calls to tools it isn't allowed to use.
+
+No extra config needed — filtering activates automatically when `allowed_tools` is non-empty.
+
+### ContextStrategy (advanced)
+
+Providers that maintain server-side conversation state can implement `provider.ContextStrategy`. When `ManagesContext()` returns true, the executor sends only new messages since the last call instead of the full history. On compaction, it calls `ResetContext()` and resends the compacted summary.
+
+This is an advanced use case for custom provider implementations. Standard Ollama/Anthropic/OpenAI providers do not implement this interface.
+
 See `scenarios/87-autonomous-agile-agent/config/agent-config.yaml` for a full example.
