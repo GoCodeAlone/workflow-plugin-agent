@@ -3,6 +3,7 @@ package orchestrator
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"github.com/GoCodeAlone/modular"
 	ratchetplugin "github.com/GoCodeAlone/workflow-plugin-agent/plugin"
@@ -62,9 +63,67 @@ func (a *inProcessMCPToolAdapter) Definition() provider.ToolDef {
 	}
 }
 
-// Execute delegates to the MCPProvider.
+// Execute delegates to the MCPProvider, with filter/summary support for list tools.
 func (a *inProcessMCPToolAdapter) Execute(ctx context.Context, args map[string]any) (any, error) {
+	if a.toolName == "list_step_types" || a.toolName == "list_module_types" || a.toolName == "list_trigger_types" {
+		return a.executeListWithFilter(ctx, args)
+	}
 	return a.provider.CallTool(ctx, a.toolName, args)
+}
+
+// executeListWithFilter calls the underlying list tool and applies optional
+// query filtering or a category summary when the result is large.
+func (a *inProcessMCPToolAdapter) executeListWithFilter(ctx context.Context, args map[string]any) (any, error) {
+	result, err := a.provider.CallTool(ctx, a.toolName, args)
+	if err != nil {
+		return nil, err
+	}
+
+	resultStr, _ := result.(string)
+
+	// If a query param is provided, filter lines by substring match.
+	if query, ok := args["query"].(string); ok && query != "" {
+		lines := strings.Split(resultStr, "\n")
+		var filtered []string
+		for _, line := range lines {
+			if strings.Contains(strings.ToLower(line), strings.ToLower(query)) {
+				filtered = append(filtered, line)
+			}
+		}
+		return strings.Join(filtered, "\n"), nil
+	}
+
+	// No query — return a category summary when the list is large.
+	lines := strings.Split(strings.TrimSpace(resultStr), "\n")
+	if len(lines) > 30 {
+		categories := categorizeItems(lines)
+		var sb strings.Builder
+		fmt.Fprintf(&sb, "%d items available. Use {\"query\": \"keyword\"} to filter.\n\nCategories:\n", len(lines))
+		for cat, count := range categories {
+			fmt.Fprintf(&sb, "  %s: %d items\n", cat, count)
+		}
+		sb.WriteString("\nExample: {\"query\": \"db\"} returns database-related items.")
+		return sb.String(), nil
+	}
+
+	return result, nil
+}
+
+// categorizeItems groups list items by their first name segment (split on '.' or '_').
+func categorizeItems(lines []string) map[string]int {
+	categories := make(map[string]int)
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		cat := line
+		if idx := strings.IndexAny(line, "._"); idx > 0 {
+			cat = line[:idx]
+		}
+		categories[cat]++
+	}
+	return categories
 }
 
 // mcpToolsHook bridges MCP tools into the ToolRegistry.
