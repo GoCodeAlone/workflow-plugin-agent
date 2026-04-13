@@ -222,9 +222,7 @@ func scanArtifact(rows *sql.Rows) (Artifact, error) {
 	}
 	_ = json.Unmarshal([]byte(contentJSON), &a.Content)
 	_ = json.Unmarshal([]byte(tagsJSON), &a.Tags)
-	if t, err := time.Parse("2006-01-02 15:04:05", createdAt); err == nil {
-		a.CreatedAt = t
-	}
+	a.CreatedAt = parseArtifactTime(createdAt)
 	return a, nil
 }
 
@@ -238,8 +236,18 @@ func scanArtifactRow(row *sql.Row) (*Artifact, error) {
 	}
 	_ = json.Unmarshal([]byte(contentJSON), &a.Content)
 	_ = json.Unmarshal([]byte(tagsJSON), &a.Tags)
-	if t, err := time.Parse("2006-01-02 15:04:05", createdAt); err == nil {
-		a.CreatedAt = t
-	}
+	a.CreatedAt = parseArtifactTime(createdAt)
 	return &a, nil
+}
+
+// parseArtifactTime parses a stored timestamp string, trying sub-second precision first
+// then falling back to second-only format.
+func parseArtifactTime(s string) time.Time {
+	if t, err := time.Parse("2006-01-02 15:04:05.999999999", s); err == nil {
+		return t
+	}
+	if t, err := time.Parse("2006-01-02 15:04:05", s); err == nil {
+		return t
+	}
+	return time.Time{}
 }

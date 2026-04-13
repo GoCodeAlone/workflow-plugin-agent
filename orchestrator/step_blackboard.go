@@ -7,6 +7,7 @@ import (
 	"github.com/GoCodeAlone/modular"
 	"github.com/GoCodeAlone/workflow/module"
 	"github.com/GoCodeAlone/workflow/plugin"
+	"github.com/google/uuid"
 )
 
 // BlackboardPostStep posts an artifact to the Blackboard.
@@ -57,6 +58,7 @@ func (s *BlackboardPostStep) Execute(ctx context.Context, pc *module.PipelineCon
 	}
 
 	art := Artifact{
+		ID:      uuid.New().String(),
 		Phase:   phase,
 		AgentID: agentID,
 		Type:    artifactType,
