@@ -22,6 +22,7 @@ type AgentExecuteStep struct {
 	name                 string
 	maxIterations        int
 	providerService      string
+	workspace            string // optional workspace path for file tools (overrides env/cwd)
 	app                  modular.Application
 	tmpl                 *module.TemplateEngine
 	approvalTimeout      time.Duration
@@ -204,6 +205,13 @@ func (s *AgentExecuteStep) Execute(ctx context.Context, pc *module.PipelineConte
 		// If container manager is available, inject it as ContainerExecer
 		if containerMgr != nil && containerMgr.IsAvailable() {
 			toolCtx = context.WithValue(toolCtx, tools.ContextKeyContainerID, tools.ContainerExecer(containerMgr))
+		}
+	}
+
+	// Inject step-config workspace as fallback when no project workspace was resolved.
+	if s.workspace != "" {
+		if ws, ok := tools.WorkspacePathFromContext(toolCtx); !ok || ws == "" {
+			toolCtx = tools.WithWorkspacePath(toolCtx, s.workspace)
 		}
 	}
 
@@ -770,6 +778,7 @@ func extractString(m map[string]any, key, defaultVal string) string {
 //
 //	max_iterations        int    — max agent loop iterations (default 10)
 //	provider_service      string — service registry key for the AI provider (default "ratchet-ai")
+//	workspace             string — workspace directory injected into file-tool context (fallback when no DB project)
 //	approval_timeout      string — duration string for approval wait, e.g. "60m" (default "30m")
 //	loop_detection:
 //	  max_consecutive     int    — default 3
@@ -800,6 +809,8 @@ func newAgentExecuteStepFactory() plugin.StepFactory {
 		if providerService == "" {
 			providerService = "ratchet-ai"
 		}
+
+		workspace, _ := cfg["workspace"].(string)
 
 		// approval_timeout: duration string, e.g. "30m", "1h". Default 30m.
 		approvalTimeout := 30 * time.Minute
@@ -855,6 +866,7 @@ func newAgentExecuteStepFactory() plugin.StepFactory {
 			name:                 name,
 			maxIterations:        maxIterations,
 			providerService:      providerService,
+			workspace:            workspace,
 			app:                  app,
 			tmpl:                 module.NewTemplateEngine(),
 			approvalTimeout:      approvalTimeout,

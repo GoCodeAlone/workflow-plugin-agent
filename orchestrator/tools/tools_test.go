@@ -693,6 +693,41 @@ func TestValidatePath_EmptyWorkspace(t *testing.T) {
 	}
 }
 
+func TestValidatePath_AbsolutePathWithinWorkspace(t *testing.T) {
+	ws := setupWorkspace(t)
+	content := "absolute path test"
+	absFile := filepath.Join(ws, "nested", "file.txt")
+	if err := os.MkdirAll(filepath.Dir(absFile), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(absFile, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	tool := &FileReadTool{Workspace: ws}
+	ctx := context.Background()
+
+	// Agent passes an absolute path — must work when within workspace.
+	result, err := tool.Execute(ctx, map[string]any{"path": absFile})
+	if err != nil {
+		t.Fatalf("absolute path within workspace should be allowed: %v", err)
+	}
+	if result != content {
+		t.Errorf("expected %q, got %q", content, result)
+	}
+}
+
+func TestValidatePath_AbsolutePathOutsideWorkspace(t *testing.T) {
+	ws := setupWorkspace(t)
+	tool := &FileReadTool{Workspace: ws}
+
+	// Absolute path outside workspace must be rejected.
+	_, err := tool.Execute(context.Background(), map[string]any{"path": "/etc/passwd"})
+	if err == nil {
+		t.Fatal("expected error for absolute path outside workspace")
+	}
+}
+
 // ---------- All tools implement the interface ----------
 
 func TestAllToolNames(t *testing.T) {

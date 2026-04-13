@@ -11,11 +11,18 @@ import (
 )
 
 // validatePath ensures the path is within the workspace and prevents traversal.
+// relPath may be relative (joined with workspace) or absolute (validated directly).
 func validatePath(workspace, relPath string) (string, error) {
 	if workspace == "" {
 		return "", fmt.Errorf("no workspace configured")
 	}
-	abs := filepath.Join(workspace, filepath.Clean(relPath))
+	var abs string
+	if filepath.IsAbs(relPath) {
+		// Absolute path: validate directly against workspace boundary.
+		abs = filepath.Clean(relPath)
+	} else {
+		abs = filepath.Join(workspace, relPath)
+	}
 	absResolved, err := filepath.Abs(abs)
 	if err != nil {
 		return "", fmt.Errorf("invalid path: %w", err)
