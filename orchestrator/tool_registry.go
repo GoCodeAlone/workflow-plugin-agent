@@ -93,12 +93,16 @@ func (tr *ToolRegistry) Get(name string) (plugin.Tool, bool) {
 }
 
 // AllDefs returns tool definitions for all registered tools.
+// Tool names use the registry key (e.g. "mcp_wfctl__validate_config")
+// so the LLM calls tools by the same name that Execute() looks up.
 func (tr *ToolRegistry) AllDefs() []provider.ToolDef {
 	tr.mu.RLock()
 	defer tr.mu.RUnlock()
 	defs := make([]provider.ToolDef, 0, len(tr.tools))
-	for _, t := range tr.tools {
-		defs = append(defs, t.Definition())
+	for regName, t := range tr.tools {
+		def := t.Definition()
+		def.Name = regName
+		defs = append(defs, def)
 	}
 	return defs
 }
