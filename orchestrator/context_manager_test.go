@@ -88,6 +88,44 @@ func TestNewContextManager_KnownProvider(t *testing.T) {
 	}
 }
 
+func TestNewContextManager_ModernModels(t *testing.T) {
+	cases := []struct {
+		name      string
+		wantMin   int
+	}{
+		{"gemma4:e2b", 131_072},
+		{"gemma3:27b", 131_072},
+		{"qwen2.5:7b", 32_768},
+		{"qwen3:14b", 131_072},
+		{"phi4", 16_384},
+		{"llama3.3:70b", 131_072},
+	}
+	for _, tc := range cases {
+		cm := NewContextManager(tc.name, 0)
+		if cm.ContextLimitTokens() < tc.wantMin {
+			t.Errorf("model %q: expected >= %d, got %d", tc.name, tc.wantMin, cm.ContextLimitTokens())
+		}
+	}
+}
+
+func TestSetModelLimitFromProvider(t *testing.T) {
+	cm := NewContextManager("unknown-model", 0)
+	before := cm.ContextLimitTokens()
+
+	cm.SetModelLimitFromProvider(16_384)
+	if cm.ContextLimitTokens() != 16_384 {
+		t.Errorf("expected 16384 after SetModelLimitFromProvider, got %d", cm.ContextLimitTokens())
+	}
+
+	// Zero should be ignored.
+	cm.SetModelLimitFromProvider(0)
+	if cm.ContextLimitTokens() != 16_384 {
+		t.Errorf("SetModelLimitFromProvider(0) should be no-op, got %d", cm.ContextLimitTokens())
+	}
+
+	_ = before // used only to show the value changed
+}
+
 // --- NeedsCompaction ---
 
 func TestNeedsCompaction_BelowThreshold(t *testing.T) {

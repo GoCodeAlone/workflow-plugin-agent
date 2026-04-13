@@ -33,6 +33,13 @@ var defaultModelContextLimits = map[string]int{
 	"gpt-3.5-turbo":     4_096,
 	"o1-preview":        128_000,
 	"o1-mini":           128_000,
+	// Ollama / local models
+	"gemma4":   131_072,
+	"gemma3":   131_072,
+	"qwen2.5":  32_768,
+	"qwen3":    131_072,
+	"phi4":     16_384,
+	"llama3.3": 131_072,
 	// Generic / unknown
 	"default": 128_000,
 }
@@ -84,6 +91,15 @@ func (cm *ContextManager) SetModelLimit(model string, limit int) {
 	cm.modelLimits[model] = limit
 	// Re-derive this manager's limit in case the override matches our model.
 	cm.contextLimit = lookupContextLimitFrom(cm.modelLimits, cm.modelName)
+}
+
+// SetModelLimitFromProvider applies a context window size reported by the provider,
+// overriding the hardcoded lookup. Use when the provider can report its own limit
+// (e.g. Ollama context_window config). No-op if limit is zero or negative.
+func (cm *ContextManager) SetModelLimitFromProvider(limit int) {
+	if limit > 0 {
+		cm.contextLimit = limit
+	}
 }
 
 // lookupContextLimit returns the token limit for a given model/provider name
