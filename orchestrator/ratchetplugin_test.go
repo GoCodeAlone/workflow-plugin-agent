@@ -1005,6 +1005,7 @@ func TestPlugin_ModuleFactories(t *testing.T) {
 		"ratchet.mcp_server",
 		"ratchet.tool_policy_engine",
 		"authz.casbin",
+		"agent.guardrails",
 	}
 	for _, name := range expected {
 		if _, ok := factories[name]; !ok {

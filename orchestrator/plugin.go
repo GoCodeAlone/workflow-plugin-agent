@@ -40,7 +40,7 @@ func New() *RatchetPlugin {
 				Version:     "1.0.0",
 				Author:      "GoCodeAlone",
 				Description: "Ratchet autonomous agent orchestration plugin",
-				ModuleTypes: []string{"agent.provider", "ratchet.sse_hub", "ratchet.scheduler", "ratchet.mcp_client", "ratchet.mcp_server", "authz.casbin"},
+				ModuleTypes: []string{"agent.provider", "ratchet.sse_hub", "ratchet.scheduler", "ratchet.mcp_client", "ratchet.mcp_server", "authz.casbin", "agent.guardrails"},
 				StepTypes:   []string{"step.agent_execute", "step.provider_test", "step.provider_models", "step.model_pull", "step.workspace_init", "step.container_control", "step.secret_manage", "step.vault_config", "step.mcp_reload", "step.oauth_exchange", "step.approval_resolve", "step.webhook_process", "step.security_audit", "step.test_interact", "step.human_request_resolve", "step.memory_extract", "step.bcrypt_check", "step.bcrypt_hash", "step.jwt_generate", "step.jwt_decode", "step.blackboard_post", "step.blackboard_read"},
 				WiringHooks: []string{"agent.provider_registry", "ratchet.sse_route_registration", "ratchet.mcp_server_route_registration", "ratchet.db_init", "ratchet.auth_token", "ratchet.secrets_guard", "ratchet.provider_registry", "ratchet.tool_policy_engine", "ratchet.sub_agent_manager", "ratchet.tool_registry", "ratchet.container_manager", "ratchet.transcript_recorder", "ratchet.skill_manager", "ratchet.approval_manager", "ratchet.human_request_manager", "ratchet.webhook_manager", "ratchet.security_auditor", "ratchet.browser_manager", "ratchet.test_interaction", "ratchet.blackboard"},
 			},
@@ -66,6 +66,7 @@ func (p *RatchetPlugin) ModuleFactories() map[string]plugin.ModuleFactory {
 		"ratchet.mcp_server":         newMCPServerFactory(),
 		"ratchet.tool_policy_engine": newToolPolicyModuleFactory(),
 		"authz.casbin":               authz.NewCasbinModuleFactory(),
+		"agent.guardrails":           newGuardrailsModuleFactory(),
 	}
 }
 
