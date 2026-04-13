@@ -2,6 +2,7 @@ package orchestrator
 
 import (
 	"context"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -24,11 +25,10 @@ func (c *countingTool) Execute(_ context.Context, _ map[string]any) (any, error)
 	return "ok", nil
 }
 
-func TestSequentialToolCalls_OnlyFirstExecutesPerTurn(t *testing.T) {
+func TestSequentialMode_ErrorOnMultipleToolCalls(t *testing.T) {
 	h := NewTestHarness(t)
 	env := SetupE2EAgent(t, h.Provider)
 
-	// Unregister default file tools and register 3 counting tools.
 	toolA := &countingTool{name: "tool_a"}
 	toolB := &countingTool{name: "tool_b"}
 	toolC := &countingTool{name: "tool_c"}
@@ -36,7 +36,6 @@ func TestSequentialToolCalls_OnlyFirstExecutesPerTurn(t *testing.T) {
 	env.ToolRegistry.Register(toolB)
 	env.ToolRegistry.Register(toolC)
 
-	// Set up the policy engine so tools are allowed.
 	pe := NewToolPolicyEngine(env.DB)
 	if err := pe.InitTable(); err != nil {
 		t.Fatalf("InitTable: %v", err)
@@ -52,14 +51,19 @@ func TestSequentialToolCalls_OnlyFirstExecutesPerTurn(t *testing.T) {
 	tc2 := provider.ToolCall{ID: "2", Name: "tool_b", Arguments: map[string]any{}}
 	tc3 := provider.ToolCall{ID: "3", Name: "tool_c", Arguments: map[string]any{}}
 
+	var secondInteraction Interaction
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		// First call: return all 3 tool calls at once — only first should execute.
+		// First call: return all 3 tool calls — no tools should execute, error injected.
 		h.ExpectInteraction(5 * time.Second)
 		h.RespondToolCall("calling tools", tc1, tc2, tc3)
 
-		// Second call: only tool_a result in context — return final answer.
+		// Second call: LLM receives the error and corrects to a single tool call.
+		secondInteraction = h.ExpectInteraction(5 * time.Second)
+		h.RespondToolCall("calling single tool", tc1)
+
+		// Third call: LLM returns final answer after seeing tool_a result.
 		h.ExpectInteraction(5 * time.Second)
 		h.RespondText("done")
 	}()
@@ -71,15 +75,28 @@ func TestSequentialToolCalls_OnlyFirstExecutesPerTurn(t *testing.T) {
 	}
 	<-done
 
-	// Only tool_a should have been called (sequential: first tool per turn).
+	// No tools should have executed on the first turn (all 3 rejected via error).
+	// tool_a executes once on the second turn after LLM corrects itself.
 	if toolA.calls.Load() != 1 {
 		t.Errorf("tool_a: expected 1 call, got %d", toolA.calls.Load())
 	}
 	if toolB.calls.Load() != 0 {
-		t.Errorf("tool_b: expected 0 calls in sequential mode, got %d", toolB.calls.Load())
+		t.Errorf("tool_b: expected 0 calls, got %d", toolB.calls.Load())
 	}
 	if toolC.calls.Load() != 0 {
-		t.Errorf("tool_c: expected 0 calls in sequential mode, got %d", toolC.calls.Load())
+		t.Errorf("tool_c: expected 0 calls, got %d", toolC.calls.Load())
+	}
+
+	// Verify the sequential-execution error was injected into the conversation.
+	found := false
+	for _, msg := range secondInteraction.Messages {
+		if msg.Role == provider.RoleUser && strings.Contains(msg.Content, "sequential execution") {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Error("expected sequential execution error message in second LLM interaction")
 	}
 }
 

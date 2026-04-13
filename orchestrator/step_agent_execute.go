@@ -299,11 +299,24 @@ func (s *AgentExecuteStep) Execute(ctx context.Context, pc *module.PipelineConte
 	var finalContent string
 	iterCount := 0
 	lastSentIndex := 0
+	emptyRetries := 0
+	intentRetries := 0
 	ld := NewLoopDetector(s.loopDetectorCfg)
 	cm := NewContextManager(aiProvider.Name(), s.compactionThreshold)
 	// If the provider reports its own context window, use that for compaction.
 	if cw, ok := aiProvider.(interface{ ContextWindow() int }); ok {
 		cm.SetModelLimitFromProvider(cw.ContextWindow())
+	}
+
+	// Wire response paginator so large tool outputs are paginated instead of truncated.
+	if toolRegistry != nil {
+		contextWindow := defaultContextLimit
+		if cw, ok := aiProvider.(interface{ ContextWindow() int }); ok {
+			if w := cw.ContextWindow(); w > 0 {
+				contextWindow = w
+			}
+		}
+		toolRegistry.SetPaginator(NewResponsePaginator(contextWindow))
 	}
 
 	for iterCount < s.maxIterations {
@@ -416,17 +429,66 @@ func (s *AgentExecuteStep) Execute(ctx context.Context, pc *module.PipelineConte
 			})
 		}
 
-		// No tool calls — we have a final answer
+		// No tool calls — check for empty response or verbalized tool intent.
 		if len(resp.ToolCalls) == 0 {
+			content := strings.TrimSpace(resp.Content)
+
+			if content == "" && emptyRetries < 2 {
+				messages = append(messages, provider.Message{
+					Role:    provider.RoleAssistant,
+					Content: "",
+				})
+				messages = append(messages, provider.Message{
+					Role: provider.RoleUser,
+					Content: "[SYSTEM] Your response was empty. Please continue with the next step. " +
+						"If you are done, respond with TASK COMPLETE and a summary.",
+				})
+				emptyRetries++
+				iterCount-- // don't count toward max
+				continue
+			}
+
+			if containsToolIntent(content, toolDefs) && intentRetries < 2 {
+				messages = append(messages, provider.Message{
+					Role:    provider.RoleAssistant,
+					Content: content,
+				})
+				messages = append(messages, provider.Message{
+					Role: provider.RoleUser,
+					Content: "[SYSTEM] You described your intent to call a tool but didn't actually " +
+						"make the tool call. Please execute the tool by making a proper tool call.",
+				})
+				intentRetries++
+				iterCount--
+				continue
+			}
+
+			// Real completion — break.
 			break
 		}
 
-		// In sequential mode, process only the first tool call per LLM turn so the
-		// model can observe the result before deciding on the next action.
-		toolCallsToProcess := resp.ToolCalls
-		if !s.parallelToolCalls && len(toolCallsToProcess) > 1 {
-			toolCallsToProcess = toolCallsToProcess[:1]
+		// In sequential mode, reject multiple tool calls and ask the LLM to resend only one.
+		if !s.parallelToolCalls && len(resp.ToolCalls) > 1 {
+			errMsg := fmt.Sprintf(
+				"[SYSTEM] You sent %d tool calls in one turn, but this agent requires sequential execution. "+
+					"Call ONE tool at a time and wait for its result. "+
+					"Your first intended call was %q — resend it as the only tool call.",
+				len(resp.ToolCalls), resp.ToolCalls[0].Name,
+			)
+			messages = append(messages, provider.Message{
+				Role:      provider.RoleAssistant,
+				Content:   resp.Content,
+				ToolCalls: resp.ToolCalls,
+			})
+			messages = append(messages, provider.Message{
+				Role:    provider.RoleUser,
+				Content: errMsg,
+			})
+			iterCount-- // correction turn; don't count toward max_iterations
+			continue
 		}
+
+		toolCallsToProcess := resp.ToolCalls
 
 		// Execute tool calls and append results
 		messages = append(messages, provider.Message{
