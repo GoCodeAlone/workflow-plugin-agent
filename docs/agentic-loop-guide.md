@@ -130,7 +130,7 @@ The workspace is also injectable via context (`AGENT_WORKSPACE` environment vari
 
 ### Git Tools
 
-`git_commit` and `git_status` operate within the workspace directory. The agent uses these to commit each iteration's changes:
+`git_commit` and `git_status` run git commands in the process working directory (not the step workspace). They accept absolute file paths in the `paths` argument. The agent uses these to commit each iteration's changes:
 
 ```
 git_commit: {"message": "feat(iter-1): add search endpoint", "paths": ["/data/config/app.yaml"]}
@@ -236,7 +236,7 @@ system_prompt: |
 
 | Key | Required | Description |
 |-----|----------|-------------|
-| `provider` | Yes | Agent provider alias — must match `provider_service` |
+| `provider` | No | DB-level provider alias (Path 1: ProviderRegistry lookup). Independent of `provider_service`. |
 | `system_prompt` | Yes (if not in step config) | Agent instructions |
 | `config_path` | No | Path to the app config file |
 | `base_app_url` | No | Base URL for web_fetch verification calls |
