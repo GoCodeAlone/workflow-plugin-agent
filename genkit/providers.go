@@ -116,7 +116,9 @@ func NewGoogleAIProvider(ctx context.Context, apiKey, model string, maxTokens in
 }
 
 // NewOllamaProvider creates a provider backed by Genkit's Ollama plugin.
-func NewOllamaProvider(ctx context.Context, model, serverAddress string, maxTokens int) (provider.Provider, error) {
+// contextWindow, when > 0, sets the Ollama num_ctx (KV cache size) and is
+// also reported via ContextWindow() so the executor can tune compaction.
+func NewOllamaProvider(ctx context.Context, model, serverAddress string, maxTokens, contextWindow int) (provider.Provider, error) {
 	if serverAddress == "" {
 		serverAddress = "http://localhost:11434"
 	}
@@ -139,13 +141,17 @@ func NewOllamaProvider(ctx context.Context, model, serverAddress string, maxToke
 	if maxTokens > 0 {
 		ollamaCfg.NumPredict = &maxTokens
 	}
+	if contextWindow > 0 {
+		ollamaCfg.NumCtx = &contextWindow
+	}
 
 	return &genkitProvider{
-		g:            g,
-		modelName:    "ollama/" + model,
-		name:         "ollama",
-		maxTokens:    maxTokens,
-		customConfig: ollamaCfg,
+		g:             g,
+		modelName:     "ollama/" + model,
+		name:          "ollama",
+		maxTokens:     maxTokens,
+		contextWindow: contextWindow,
+		customConfig:  ollamaCfg,
 		authInfo: provider.AuthModeInfo{
 			Mode:        "none",
 			DisplayName: "Ollama (local)",

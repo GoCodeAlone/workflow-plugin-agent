@@ -36,7 +36,7 @@ func TestNewGoogleAIProvider_MissingKey(t *testing.T) {
 func TestNewOllamaProvider_DefaultAddress(t *testing.T) {
 	// Ollama doesn't require an API key; verify factory instantiation works
 	// with default address (no real server needed for creation)
-	p, err := NewOllamaProvider(context.Background(), "qwen3:8b", "", 4096)
+	p, err := NewOllamaProvider(context.Background(), "qwen3:8b", "", 4096, 0)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -89,7 +89,7 @@ func TestNewVertexAIProvider_MissingProject(t *testing.T) {
 
 func TestProviderImplementsInterface(t *testing.T) {
 	// Ensure all returned providers implement provider.Provider
-	p, err := NewOllamaProvider(context.Background(), "test", "http://localhost:11434", 4096)
+	p, err := NewOllamaProvider(context.Background(), "test", "http://localhost:11434", 4096, 0)
 	if err != nil {
 		t.Skip("factory failed, skipping interface check")
 	}
@@ -128,7 +128,7 @@ func TestNewOllamaProvider_GemmaToolSupport(t *testing.T) {
 	}))
 	defer mockOllama.Close()
 
-	p, err := NewOllamaProvider(context.Background(), "gemma4:e2b", mockOllama.URL, 0)
+	p, err := NewOllamaProvider(context.Background(), "gemma4:e2b", mockOllama.URL, 0, 0)
 	if err != nil {
 		t.Fatalf("unexpected creation error: %v", err)
 	}

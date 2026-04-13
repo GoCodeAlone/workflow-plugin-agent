@@ -90,6 +90,13 @@ func newProviderModuleFactory() plugin.ModuleFactory {
 		case float64:
 			maxTokens = int(v)
 		}
+		contextWindow := 0
+		switch v := cfg["context_window"].(type) {
+		case int:
+			contextWindow = v
+		case float64:
+			contextWindow = int(v)
+		}
 
 		var p provider.Provider
 		var httpSource *provider.HTTPSource
@@ -208,7 +215,7 @@ func newProviderModuleFactory() plugin.ModuleFactory {
 			}
 
 		case "ollama":
-			if prov, err := gkprov.NewOllamaProvider(context.TODO() /* ModuleFactory doesn't receive ctx; TODO: thread ctx via Start() */, model, baseURL, maxTokens); err != nil {
+			if prov, err := gkprov.NewOllamaProvider(context.TODO() /* ModuleFactory doesn't receive ctx; TODO: thread ctx via Start() */, model, baseURL, maxTokens, contextWindow); err != nil {
 				p = &errProvider{err: err}
 			} else {
 				p = prov

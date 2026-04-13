@@ -118,7 +118,7 @@ func TestIntegration_Ollama(t *testing.T) {
 	if model == "" {
 		t.Skip("skipping: OLLAMA_MODEL not set")
 	}
-	p, err := genkit.NewOllamaProvider(context.Background(), model, serverAddr, 256)
+	p, err := genkit.NewOllamaProvider(context.Background(), model, serverAddr, 256, 0)
 	if err != nil {
 		t.Fatalf("NewOllamaProvider: %v", err)
 	}

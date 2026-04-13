@@ -336,7 +336,11 @@ func geminiProviderFactory(ctx context.Context, apiKey string, cfg LLMProviderCo
 }
 
 func ollamaProviderFactory(ctx context.Context, _ string, cfg LLMProviderConfig) (provider.Provider, error) {
-	return gkprov.NewOllamaProvider(ctx, cfg.Model, cfg.BaseURL, cfg.MaxTokens)
+	contextWindow := 0
+	if v := cfg.settings()["context_window"]; v != "" {
+		fmt.Sscanf(v, "%d", &contextWindow)
+	}
+	return gkprov.NewOllamaProvider(ctx, cfg.Model, cfg.BaseURL, cfg.MaxTokens, contextWindow)
 }
 
 func llamaCppProviderFactory(ctx context.Context, _ string, cfg LLMProviderConfig) (provider.Provider, error) {

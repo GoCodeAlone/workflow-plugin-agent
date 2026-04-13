@@ -16,7 +16,8 @@ type genkitProvider struct {
 	modelName string // "provider/model" format e.g. "anthropic/claude-sonnet-4-6"
 	name      string
 	authInfo  provider.AuthModeInfo
-	maxTokens int // 0 means use model default
+	maxTokens     int // 0 means use model default
+	contextWindow int // 0 means use model default; non-zero passed as num_ctx to Ollama
 
 	// customConfig, when non-nil, is sent via ai.WithConfig instead of
 	// GenerationCommonConfig. Used for providers with their own config
@@ -26,6 +27,9 @@ type genkitProvider struct {
 	mu           sync.Mutex
 	definedTools map[string]bool // tracks which tool names are registered
 }
+
+// ContextWindow returns the configured context window size (0 = provider default).
+func (p *genkitProvider) ContextWindow() int { return p.contextWindow }
 
 func (p *genkitProvider) Name() string                      { return p.name }
 func (p *genkitProvider) AuthModeInfo() provider.AuthModeInfo { return p.authInfo }

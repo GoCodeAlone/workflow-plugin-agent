@@ -18,14 +18,15 @@ import (
 
 // LLMProviderConfig represents a configured LLM provider stored in the database.
 type LLMProviderConfig struct {
-	ID         string `json:"id"`
-	Alias      string `json:"alias"`
-	Type       string `json:"type"`
-	Model      string `json:"model"`
-	SecretName string `json:"secret_name"`
-	BaseURL    string `json:"base_url"`
-	MaxTokens  int    `json:"max_tokens"`
-	IsDefault  int    `json:"is_default"`
+	ID            string `json:"id"`
+	Alias         string `json:"alias"`
+	Type          string `json:"type"`
+	Model         string `json:"model"`
+	SecretName    string `json:"secret_name"`
+	BaseURL       string `json:"base_url"`
+	MaxTokens     int    `json:"max_tokens"`
+	ContextWindow int    `json:"context_window"` // optional KV cache size (Ollama num_ctx)
+	IsDefault     int    `json:"is_default"`
 }
 
 // ProviderFactory creates a provider.Provider from a context, API key, and config.
@@ -73,7 +74,7 @@ func NewProviderRegistry(db *sql.DB, secretsProvider secrets.Provider) *Provider
 		return gkprov.NewOpenAICompatibleProvider(ctx, "copilot", apiKey, cfg.Model, baseURL, cfg.MaxTokens)
 	}
 	r.Factories["ollama"] = func(ctx context.Context, _ string, cfg LLMProviderConfig) (provider.Provider, error) {
-		return gkprov.NewOllamaProvider(ctx, cfg.Model, cfg.BaseURL, cfg.MaxTokens)
+		return gkprov.NewOllamaProvider(ctx, cfg.Model, cfg.BaseURL, cfg.MaxTokens, cfg.ContextWindow)
 	}
 	r.Factories["llama_cpp"] = func(ctx context.Context, _ string, cfg LLMProviderConfig) (provider.Provider, error) {
 		return gkprov.NewOpenAICompatibleProvider(ctx, "llama_cpp", "", cfg.Model, cfg.BaseURL, cfg.MaxTokens)
