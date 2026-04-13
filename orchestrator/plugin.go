@@ -337,10 +337,20 @@ func toolRegistryHook() plugin.WiringHook {
 				}
 			}
 
+			// Determine default workspace for file tools.
+			// AGENT_WORKSPACE env var takes priority, then cwd, then temp dir.
+			workspace := os.Getenv("AGENT_WORKSPACE")
+			if workspace == "" {
+				workspace, _ = os.Getwd()
+			}
+			if workspace == "" {
+				workspace = os.TempDir()
+			}
+
 			// Register built-in file and shell tools
-			registry.Register(&tools.FileReadTool{})
-			registry.Register(&tools.FileWriteTool{})
-			registry.Register(&tools.FileListTool{})
+			registry.Register(&tools.FileReadTool{Workspace: workspace})
+			registry.Register(&tools.FileWriteTool{Workspace: workspace})
+			registry.Register(&tools.FileListTool{Workspace: workspace})
 			registry.Register(&tools.ShellExecTool{})
 			registry.Register(&tools.WebFetchTool{})
 
