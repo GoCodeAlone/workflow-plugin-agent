@@ -192,9 +192,10 @@ func TestFileWriteTool_Execute(t *testing.T) {
 	})
 
 	t.Run("creates parent directories", func(t *testing.T) {
+		content := "nested file content"
 		_, err := tool.Execute(ctx, map[string]any{
 			"path":    "sub/dir/deep.txt",
-			"content": "nested",
+			"content": content,
 		})
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
@@ -203,8 +204,8 @@ func TestFileWriteTool_Execute(t *testing.T) {
 		if err != nil {
 			t.Fatalf("read back nested: %v", err)
 		}
-		if string(data) != "nested" {
-			t.Errorf("expected %q, got %q", "nested", string(data))
+		if string(data) != content {
+			t.Errorf("expected %q, got %q", content, string(data))
 		}
 	})
 
