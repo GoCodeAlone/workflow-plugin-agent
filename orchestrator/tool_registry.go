@@ -116,18 +116,25 @@ func (tr *ToolRegistry) Execute(ctx context.Context, name string, args map[strin
 	tr.mu.RLock()
 	t, ok := tr.tools[name]
 	pe := tr.policyEngine
+	var snapshot map[string]plugin.Tool
+	if !ok {
+		snapshot = make(map[string]plugin.Tool, len(tr.tools))
+		for k, v := range tr.tools {
+			snapshot[k] = v
+		}
+	}
 	tr.mu.RUnlock()
 	if !ok {
-		suggestion := suggestTool(name, tr.tools)
+		suggestion := suggestTool(name, snapshot)
 		msg := fmt.Sprintf("tool %q not found in registry", name)
 		if suggestion != "" {
-			if st, exists := tr.tools[suggestion]; exists {
+			if st, exists := snapshot[suggestion]; exists {
 				def := st.Definition()
 				paramBytes, _ := json.Marshal(def.Parameters)
 				msg += fmt.Sprintf(". Did you mean %q? Parameters: %s", suggestion, string(paramBytes))
 			}
 		}
-		names := toolNames(tr.tools)
+		names := toolNames(snapshot)
 		sort.Strings(names)
 		msg += fmt.Sprintf(". Available tools: %s", strings.Join(names, ", "))
 		return nil, fmt.Errorf("%s", msg)
