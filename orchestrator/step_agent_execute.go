@@ -300,6 +300,10 @@ func (s *AgentExecuteStep) Execute(ctx context.Context, pc *module.PipelineConte
 	lastSentIndex := 0
 	ld := NewLoopDetector(s.loopDetectorCfg)
 	cm := NewContextManager(aiProvider.Name(), s.compactionThreshold)
+	// If the provider reports its own context window, use that for compaction.
+	if cw, ok := aiProvider.(interface{ ContextWindow() int }); ok {
+		cm.SetModelLimitFromProvider(cw.ContextWindow())
+	}
 
 	for iterCount < s.maxIterations {
 		iterCount++
