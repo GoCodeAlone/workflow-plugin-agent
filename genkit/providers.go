@@ -9,7 +9,6 @@ import (
 	"time"
 
 	"github.com/GoCodeAlone/workflow-plugin-agent/provider"
-	"github.com/firebase/genkit/go/ai"
 	gk "github.com/firebase/genkit/go/genkit"
 	anthropicPlugin "github.com/firebase/genkit/go/plugins/anthropic"
 	"github.com/firebase/genkit/go/plugins/compat_oai"
@@ -127,18 +126,9 @@ func NewOllamaProvider(ctx context.Context, model, serverAddress string, maxToke
 	p := &ollamaPlugin.Ollama{ServerAddress: serverAddress, Timeout: 300} // 5 min — model loading can be slow
 	g := initGenkitWithPlugin(ctx, gk.WithPlugins(p))
 
-	// Explicitly define the model with Tools:true. The Genkit Ollama plugin has a
-	// hardcoded toolSupportedModels allowlist (gemma4 not included); DefineModel
-	// with nil opts would use that list and produce Tools:false for unsupported
-	// models. By passing explicit ModelOptions we bypass the allowlist entirely.
-	p.DefineModel(g, ollamaPlugin.ModelDefinition{Name: model, Type: "chat"}, &ai.ModelOptions{
-		Supports: &ai.ModelSupports{
-			Multiturn:  true,
-			SystemRole: true,
-			Tools:      true,
-			Media:      false,
-		},
-	})
+	// The Genkit Ollama plugin (GoCodeAlone fork) dynamically queries
+	// /api/show for model capabilities, so all models with tool support
+	// (including gemma4) are detected automatically. No hardcoded override needed.
 
 	// Build Ollama-native config. Disable thinking by default — it adds
 	// latency and leaks reasoning as text in complex multi-tool prompts.

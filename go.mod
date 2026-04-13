@@ -13,7 +13,7 @@ require (
 	github.com/coder/acp-go-sdk v0.6.3
 	github.com/creack/pty v1.1.24
 	github.com/docker/docker v28.5.2+incompatible
-	github.com/firebase/genkit/go v1.6.0
+	github.com/firebase/genkit/go v1.6.1
 	github.com/go-rod/rod v0.116.2
 	github.com/golang-jwt/jwt/v5 v5.3.1
 	github.com/google/generative-ai-go v0.20.1
@@ -257,7 +257,7 @@ require (
 	golang.org/x/sys v0.43.0 // indirect
 	golang.org/x/time v0.15.0 // indirect
 	golang.org/x/tools v0.43.0 // indirect
-	google.golang.org/genai v1.41.0 // indirect
+	google.golang.org/genai v1.51.0 // indirect
 	google.golang.org/genproto v0.0.0-20260319201613-d00831a3d3e7 // indirect
 	google.golang.org/genproto/googleapis/api v0.0.0-20260406210006-6f92a3bedf2d // indirect
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20260406210006-6f92a3bedf2d // indirect
@@ -270,3 +270,5 @@ require (
 	modernc.org/mathutil v1.7.1 // indirect
 	modernc.org/memory v1.11.0 // indirect
 )
+
+replace github.com/firebase/genkit/go => github.com/GoCodeAlone/genkit/go v1.6.2-gocodealone.1
