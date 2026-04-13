@@ -11,7 +11,7 @@ func TestInjectBlackboardInput_NoPhase(t *testing.T) {
 	app := newMockApp()
 	pc := &module.PipelineContext{Current: map[string]any{}}
 
-	err := InjectBlackboardInput(context.Background(), app, InputFromBlackboard{}, pc)
+	_, err := InjectBlackboardInput(context.Background(), app, InputFromBlackboard{}, pc)
 	if err != nil {
 		t.Fatalf("expected no error with empty phase, got: %v", err)
 	}
@@ -25,12 +25,12 @@ func TestInjectBlackboardInput_NoBlackboard(t *testing.T) {
 	app := newMockApp() // no blackboard registered
 	pc := &module.PipelineContext{Current: map[string]any{}}
 
-	cfg := InputFromBlackboard{Phase: "design", InjectKey: "bb_in"}
-	err := InjectBlackboardInput(context.Background(), app, cfg, pc)
+	cfg := InputFromBlackboard{Phase: "design"}
+	_, err := InjectBlackboardInput(context.Background(), app, cfg, pc)
 	if err != nil {
 		t.Fatalf("expected nil when blackboard not available, got: %v", err)
 	}
-	if pc.Current["bb_in"] != nil {
+	if pc.Current["blackboard_input"] != nil {
 		t.Errorf("expected no injection without blackboard")
 	}
 }
@@ -50,15 +50,15 @@ func TestInjectBlackboardInput_LatestOnly(t *testing.T) {
 	_ = app.RegisterService("ratchet-blackboard", bb)
 	pc := &module.PipelineContext{Current: map[string]any{}}
 
-	cfg := InputFromBlackboard{Phase: "design", LatestOnly: true, InjectKey: "bb_in"}
-	err := InjectBlackboardInput(context.Background(), app, cfg, pc)
+	cfg := InputFromBlackboard{Phase: "design", LatestOnly: true}
+	_, err := InjectBlackboardInput(context.Background(), app, cfg, pc)
 	if err != nil {
 		t.Fatalf("InjectBlackboardInput: %v", err)
 	}
 
-	injected, ok := pc.Current["bb_in"].(map[string]any)
+	injected, ok := pc.Current["blackboard_input"].(map[string]any)
 	if !ok {
-		t.Fatalf("expected artifact map in bb_in, got %T", pc.Current["bb_in"])
+		t.Fatalf("expected artifact map in blackboard_input, got %T", pc.Current["blackboard_input"])
 	}
 	content, _ := injected["content"].(map[string]any)
 	if content["v"] == nil {
@@ -75,15 +75,15 @@ func TestInjectBlackboardInput_MultipleArtifacts(t *testing.T) {
 	_ = app.RegisterService("ratchet-blackboard", bb)
 	pc := &module.PipelineContext{Current: map[string]any{}}
 
-	cfg := InputFromBlackboard{Phase: "review", ArtifactType: "review_findings", InjectKey: "reviews"}
-	err := InjectBlackboardInput(context.Background(), app, cfg, pc)
+	cfg := InputFromBlackboard{Phase: "review", ArtifactType: "review_findings"}
+	_, err := InjectBlackboardInput(context.Background(), app, cfg, pc)
 	if err != nil {
 		t.Fatalf("InjectBlackboardInput: %v", err)
 	}
 
-	reviews, ok := pc.Current["reviews"].([]map[string]any)
+	reviews, ok := pc.Current["blackboard_input"].([]map[string]any)
 	if !ok {
-		t.Fatalf("expected slice in reviews, got %T", pc.Current["reviews"])
+		t.Fatalf("expected slice in blackboard_input, got %T", pc.Current["blackboard_input"])
 	}
 	if len(reviews) != 2 {
 		t.Errorf("expected 2 reviews, got %d", len(reviews))
@@ -97,14 +97,63 @@ func TestInjectBlackboardInput_EmptyResult(t *testing.T) {
 	_ = app.RegisterService("ratchet-blackboard", bb)
 	pc := &module.PipelineContext{Current: map[string]any{}}
 
-	cfg := InputFromBlackboard{Phase: "nonexistent", InjectKey: "bb_in"}
-	err := InjectBlackboardInput(context.Background(), app, cfg, pc)
+	cfg := InputFromBlackboard{Phase: "nonexistent"}
+	_, err := InjectBlackboardInput(context.Background(), app, cfg, pc)
 	if err != nil {
 		t.Fatalf("InjectBlackboardInput: %v", err)
 	}
 	// No artifacts found — key should not be injected
-	if pc.Current["bb_in"] != nil {
-		t.Errorf("expected no injection for empty phase, got: %v", pc.Current["bb_in"])
+	if pc.Current["blackboard_input"] != nil {
+		t.Errorf("expected no injection for empty phase, got: %v", pc.Current["blackboard_input"])
+	}
+}
+
+func TestInjectBlackboardInput_SystemPromptAppend(t *testing.T) {
+	bb := newTestBlackboard(t)
+	_ = bb.Post(context.Background(), Artifact{
+		Phase: "design", AgentID: "a", Type: "yaml_config",
+		Content: map[string]any{"spec": "v1"},
+	})
+
+	app := newMockApp()
+	_ = app.RegisterService("ratchet-blackboard", bb)
+	pc := &module.PipelineContext{Current: map[string]any{}}
+
+	cfg := InputFromBlackboard{Phase: "design", LatestOnly: true, InjectAs: "system_prompt_append"}
+	content, err := InjectBlackboardInput(context.Background(), app, cfg, pc)
+	if err != nil {
+		t.Fatalf("InjectBlackboardInput: %v", err)
+	}
+	if content == "" {
+		t.Error("expected non-empty content for system_prompt_append mode")
+	}
+	// pc.Current should NOT be modified in prompt mode
+	if pc.Current["blackboard_input"] != nil {
+		t.Errorf("expected pc.Current unmodified in prompt mode, got: %v", pc.Current["blackboard_input"])
+	}
+}
+
+func TestInjectBlackboardInput_UserMessage(t *testing.T) {
+	bb := newTestBlackboard(t)
+	_ = bb.Post(context.Background(), Artifact{
+		Phase: "review", AgentID: "b", Type: "review_findings",
+		Content: map[string]any{"finding": "ok"},
+	})
+
+	app := newMockApp()
+	_ = app.RegisterService("ratchet-blackboard", bb)
+	pc := &module.PipelineContext{Current: map[string]any{}}
+
+	cfg := InputFromBlackboard{Phase: "review", ArtifactType: "review_findings", InjectAs: "user_message"}
+	content, err := InjectBlackboardInput(context.Background(), app, cfg, pc)
+	if err != nil {
+		t.Fatalf("InjectBlackboardInput: %v", err)
+	}
+	if content == "" {
+		t.Error("expected non-empty content for user_message mode")
+	}
+	if pc.Current["blackboard_input"] != nil {
+		t.Errorf("expected pc.Current unmodified in user_message mode")
 	}
 }
 
@@ -114,7 +163,7 @@ func TestParseInputFromBlackboard(t *testing.T) {
 			"phase":         "design",
 			"artifact_type": "yaml_config",
 			"latest_only":   true,
-			"inject_key":    "design_input",
+			"inject_as":     "system_prompt_append",
 		},
 	}
 
@@ -131,8 +180,8 @@ func TestParseInputFromBlackboard(t *testing.T) {
 	if !ibb.LatestOnly {
 		t.Error("expected latest_only=true")
 	}
-	if ibb.InjectKey != "design_input" {
-		t.Errorf("inject_key: want design_input, got %q", ibb.InjectKey)
+	if ibb.InjectAs != "system_prompt_append" {
+		t.Errorf("inject_as: want system_prompt_append, got %q", ibb.InjectAs)
 	}
 }
 

@@ -113,13 +113,23 @@ func TestSelfImproveDiffStep_PostToBlackboard(t *testing.T) {
 		t.Errorf("unexpected blackboard warning: %v", result.Output["blackboard_warning"])
 	}
 
-	// Verify artifact posted
+	// Verify artifact posted with correct content
 	artifacts, err := bb.Read(context.Background(), "implement", "config_diff")
 	if err != nil {
 		t.Fatalf("Read blackboard: %v", err)
 	}
 	if len(artifacts) != 1 {
-		t.Errorf("expected 1 artifact in blackboard, got %d", len(artifacts))
+		t.Fatalf("expected 1 artifact in blackboard, got %d", len(artifacts))
+	}
+	content := artifacts[0].Content
+	// "old: value\n" vs "new: value\n" — 1 line changed = 1 added, 1 removed
+	// JSON round-trip via SQLite returns numbers as float64.
+	linesAdded, _ := content["lines_added"].(float64)
+	if linesAdded != 1 {
+		t.Errorf("expected lines_added=1 (not total diff lines), got %v", linesAdded)
+	}
+	if content["diff"] == "" {
+		t.Error("expected non-empty diff in artifact content")
 	}
 }
 

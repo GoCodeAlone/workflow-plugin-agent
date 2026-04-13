@@ -42,14 +42,18 @@ func (s *AgentExecuteStep) Execute(ctx context.Context, pc *module.PipelineConte
 		return nil, fmt.Errorf("agent_execute step %q: no application context", s.name)
 	}
 
-	// Blackboard input injection: read artifact(s) from the blackboard and inject
-	// into pc.Current before the agent loop begins.
+	// Blackboard input injection (default / pc.Current mode only).
+	// system_prompt_append and user_message modes are handled after systemPrompt is built.
+	var blackboardPromptContent string
 	if s.hasBlackboardInput {
-		if err := InjectBlackboardInput(ctx, s.app, s.inputFromBlackboard, pc); err != nil {
+		content, err := InjectBlackboardInput(ctx, s.app, s.inputFromBlackboard, pc)
+		if err != nil {
 			// Non-fatal: log and continue without blackboard input
 			if logger := s.app.Logger(); logger != nil {
 				logger.Warn("agent_execute: blackboard input injection failed", "error", err, "step", s.name)
 			}
+		} else {
+			blackboardPromptContent = content
 		}
 	}
 
@@ -234,10 +238,26 @@ func (s *AgentExecuteStep) Execute(ctx context.Context, pc *module.PipelineConte
 		}
 	}
 
+	// Apply blackboard content injection now that systemPrompt is fully built.
+	if blackboardPromptContent != "" {
+		switch s.inputFromBlackboard.InjectAs {
+		case "system_prompt_append":
+			systemPrompt = systemPrompt + "\n\n## Blackboard Context\n" + blackboardPromptContent
+		}
+	}
+
 	// Build initial conversation
 	messages := []provider.Message{
 		{Role: provider.RoleSystem, Content: systemPrompt},
 		{Role: provider.RoleUser, Content: fmt.Sprintf("Task for agent %q:\n\n%s", agentName, taskDescription)},
+	}
+
+	// Inject blackboard content as a user message (before the agent loop begins).
+	if blackboardPromptContent != "" && s.inputFromBlackboard.InjectAs == "user_message" {
+		messages = append(messages, provider.Message{
+			Role:    provider.RoleUser,
+			Content: "## Context from Blackboard\n" + blackboardPromptContent,
+		})
 	}
 
 	// Get tool definitions

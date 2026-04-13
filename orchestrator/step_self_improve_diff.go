@@ -99,13 +99,14 @@ func (s *SelfImproveDiffStep) postToBlackboard(ctx context.Context, pc *module.P
 	phase := extractString(pc.Current, "phase", "implement")
 	agentID := extractString(pc.Current, "agent_id", "")
 
+	linesAdded, _ := countDiffLines(diff)
 	art := Artifact{
 		Phase:   phase,
 		AgentID: agentID,
 		Type:    "config_diff",
 		Content: map[string]any{
 			"diff":        strings.Join(diff, "\n"),
-			"lines_added": len(diff),
+			"lines_added": linesAdded,
 		},
 		Tags: []string{"diff"},
 	}

@@ -2,6 +2,7 @@ package orchestrator
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"github.com/GoCodeAlone/workflow/module"
@@ -107,14 +108,14 @@ func TestSelfImproveValidateStep_MCPUnavailable(t *testing.T) {
 		t.Fatalf("Execute: %v", err)
 	}
 	warnings, _ := result.Output["warnings"].([]string)
-	found := false
+	hasLSPWarn := false
 	for _, w := range warnings {
-		if w != "" {
-			found = true
+		if strings.Contains(w, "lsp provider not available") {
+			hasLSPWarn = true
 			break
 		}
 	}
-	if !found {
-		// It's OK if warnings is empty — MCP skip warning is informational
+	if !hasLSPWarn {
+		t.Errorf("expected lsp-unavailable warning, got warnings: %v", warnings)
 	}
 }

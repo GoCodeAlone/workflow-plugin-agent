@@ -100,10 +100,15 @@ type LSPProvider interface {
 
 // findLSPProvider looks up any registered LSPProvider from the service registry.
 func (s *LSPDiagnoseStep) findLSPProvider() LSPProvider {
-	if s.app == nil {
+	return lookupLSPProvider(s.app)
+}
+
+// lookupLSPProvider is the package-level helper used by multiple step types.
+func lookupLSPProvider(app modular.Application) LSPProvider {
+	if app == nil {
 		return nil
 	}
-	for _, svc := range s.app.SvcRegistry() {
+	for _, svc := range app.SvcRegistry() {
 		if lsp, ok := svc.(LSPProvider); ok {
 			return lsp
 		}

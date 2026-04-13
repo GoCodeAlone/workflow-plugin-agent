@@ -70,7 +70,25 @@ func (s *SelfImproveValidateStep) Execute(ctx context.Context, pc *module.Pipeli
 		}
 	}
 
-	// Step 3: MCP wfctl validation (optional — graceful skip if unavailable)
+	// Step 3: LSP diagnostics (optional — graceful skip if no LSP provider registered)
+	if lsp := lookupLSPProvider(s.app); lsp != nil {
+		diags, lspErr := lsp.DiagnoseContent(proposedYAML)
+		if lspErr != nil {
+			warnings = append(warnings, "lsp diagnostics error: "+lspErr.Error())
+		} else {
+			for _, d := range diags {
+				if d.Severity == "error" {
+					errors = append(errors, fmt.Sprintf("lsp: %s", d.Message))
+				} else {
+					warnings = append(warnings, fmt.Sprintf("lsp: %s", d.Message))
+				}
+			}
+		}
+	} else {
+		warnings = append(warnings, "lsp provider not available; skipping diagnostics")
+	}
+
+	// Step 4: MCP wfctl validation (optional — graceful skip if unavailable)
 	mcpWarning := s.runMCPValidation(ctx, proposedYAML)
 	if mcpWarning != "" {
 		warnings = append(warnings, mcpWarning)
