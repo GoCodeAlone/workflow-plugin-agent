@@ -348,12 +348,18 @@ func (s *AgentExecuteStep) Execute(ctx context.Context, pc *module.PipelineConte
 			}
 		}
 
+		// Filter tool definitions to only those permitted by guardrails.
+		filteredToolDefs := toolDefs
+		if guardrails != nil {
+			filteredToolDefs = guardrails.FilterTools(toolDefs)
+		}
+
 		// For stateful providers, send only new messages since the last call.
 		chatMessages := messages
 		if contextStrategy != nil {
 			chatMessages = messages[lastSentIndex:]
 		}
-		resp, err := aiProvider.Chat(ctx, chatMessages, toolDefs)
+		resp, err := aiProvider.Chat(ctx, chatMessages, filteredToolDefs)
 		if contextStrategy != nil {
 			lastSentIndex = len(messages)
 		}
@@ -867,7 +873,7 @@ func newAgentExecuteStepFactory() plugin.StepFactory {
 		}
 
 		// context sub-map
-		compactionThreshold := 0.0
+		compactionThreshold := 0.80
 		if raw, ok := cfg["context"].(map[string]any); ok {
 			if v, ok := raw["compaction_threshold"].(float64); ok && v > 0 {
 				compactionThreshold = v

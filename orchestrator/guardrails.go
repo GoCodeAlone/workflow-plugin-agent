@@ -6,6 +6,7 @@ import (
 
 	"github.com/GoCodeAlone/modular"
 	"github.com/GoCodeAlone/workflow-plugin-agent/executor"
+	"github.com/GoCodeAlone/workflow-plugin-agent/provider"
 	"github.com/GoCodeAlone/workflow-plugin-agent/safety"
 	"github.com/GoCodeAlone/workflow/plugin"
 )
@@ -149,6 +150,28 @@ func (g *GuardrailsModule) CheckImmutableSection(path string) (protected bool, o
 // Defaults returns a copy of the default guardrails configuration.
 func (g *GuardrailsModule) Defaults() GuardrailsDefaults {
 	return g.defaults
+}
+
+// FilterTools returns only the tool definitions allowed by the guardrails default rules.
+// If no allowed_tools patterns are configured, all tools are passed through.
+func (g *GuardrailsModule) FilterTools(tools []provider.ToolDef) []provider.ToolDef {
+	if g == nil {
+		return tools
+	}
+	patterns := g.defaults.AllowedTools
+	if len(patterns) == 0 {
+		return tools
+	}
+	var filtered []provider.ToolDef
+	for _, t := range tools {
+		for _, pattern := range patterns {
+			if matchPattern(pattern, t.Name) {
+				filtered = append(filtered, t)
+				break
+			}
+		}
+	}
+	return filtered
 }
 
 // --- executor.TrustEvaluator implementation ---
