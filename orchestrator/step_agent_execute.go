@@ -34,6 +34,7 @@ type AgentExecuteStep struct {
 	browserMaxTextLen    int
 	inputFromBlackboard  InputFromBlackboard
 	hasBlackboardInput   bool
+	parallelToolCalls    bool
 }
 
 func (s *AgentExecuteStep) Name() string { return s.name }
@@ -420,14 +421,21 @@ func (s *AgentExecuteStep) Execute(ctx context.Context, pc *module.PipelineConte
 			break
 		}
 
+		// In sequential mode, process only the first tool call per LLM turn so the
+		// model can observe the result before deciding on the next action.
+		toolCallsToProcess := resp.ToolCalls
+		if !s.parallelToolCalls && len(toolCallsToProcess) > 1 {
+			toolCallsToProcess = toolCallsToProcess[:1]
+		}
+
 		// Execute tool calls and append results
 		messages = append(messages, provider.Message{
 			Role:      provider.RoleAssistant,
 			Content:   resp.Content,
-			ToolCalls: resp.ToolCalls,
+			ToolCalls: toolCallsToProcess,
 		})
 
-		for _, tc := range resp.ToolCalls {
+		for _, tc := range toolCallsToProcess {
 			var resultStr string
 			var isError bool
 
@@ -900,6 +908,12 @@ func newAgentExecuteStepFactory() plugin.StepFactory {
 		// input_from_blackboard: optional config for reading blackboard artifacts into agent context.
 		ibb, hasIBB := parseInputFromBlackboard(cfg)
 
+		// parallel_tool_calls: default true. Set false to execute one tool call per LLM turn.
+		parallelToolCalls := true
+		if v, ok := cfg["parallel_tool_calls"].(bool); ok {
+			parallelToolCalls = v
+		}
+
 		return &AgentExecuteStep{
 			name:                 name,
 			maxIterations:        maxIterations,
@@ -916,6 +930,7 @@ func newAgentExecuteStepFactory() plugin.StepFactory {
 			browserMaxTextLen:    browserMaxTextLen,
 			inputFromBlackboard:  ibb,
 			hasBlackboardInput:   hasIBB,
+			parallelToolCalls:    parallelToolCalls,
 		}, nil
 	}
 }
