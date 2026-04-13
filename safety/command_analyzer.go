@@ -83,7 +83,9 @@ func (a *CommandAnalyzer) Analyze(cmd string) (*CommandVerdict, error) {
 
 	v := &CommandVerdict{Safe: true}
 
-	// Check raw command string against blocked patterns before parsing.
+	// Check raw command string against blocked patterns before AST parsing.
+	// This catches patterns that don't surface as simple CallExprs (e.g. fork bombs,
+	// variable-expansion tricks in the full command string).
 	for _, pattern := range a.policy.BlockedPatterns {
 		if strings.Contains(cmd, pattern) {
 			v.Risks = append(v.Risks, Risk{
@@ -158,9 +160,10 @@ func (a *CommandAnalyzer) Analyze(cmd string) (*CommandVerdict, error) {
 }
 
 func (a *CommandAnalyzer) checkDestructive(v *CommandVerdict, fullCmd, cmdName string) {
-	// BlockedPatterns are already checked against the full raw command before parsing;
-	// only check well-known destructive binaries here to avoid duplicate risk entries.
-	alwaysDestructive := map[string]bool{"mkfs": true, "fdisk": true, "wipefs": true}
+	// Catch destructive binaries not covered by BlockedPatterns.
+	// "mkfs" is intentionally excluded — it's already in the default BlockedPatterns
+	// and would create duplicate risk entries if also checked here.
+	alwaysDestructive := map[string]bool{"fdisk": true, "wipefs": true}
 	if alwaysDestructive[cmdName] {
 		v.Risks = append(v.Risks, Risk{
 			Type:        "destructive",
