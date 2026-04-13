@@ -3,6 +3,7 @@ package orchestrator
 import (
 	"context"
 	"fmt"
+	"reflect"
 	"strings"
 
 	"github.com/GoCodeAlone/modular"
@@ -123,7 +124,7 @@ func (s *SelfImproveValidateStep) checkImmutability(proposedYAML, currentYAML st
 	for _, sec := range guardrails.immutableSections {
 		proposedVal := extractNestedPath(proposed, sec.Path)
 		currentVal := extractNestedPath(current, sec.Path)
-		if fmt.Sprintf("%v", proposedVal) != fmt.Sprintf("%v", currentVal) {
+		if !reflect.DeepEqual(proposedVal, currentVal) {
 			violations = append(violations, ImmutabilityViolation{
 				Path:     sec.Path,
 				Override: sec.Override,

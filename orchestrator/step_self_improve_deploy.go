@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"strings"
+	"time"
 
 	"github.com/GoCodeAlone/modular"
 	"github.com/GoCodeAlone/workflow/module"
@@ -270,10 +271,16 @@ func writeFileContents(path, content string) error {
 	return os.WriteFile(path, []byte(content), 0o644)
 }
 
-// runCommand executes a shell command and returns stdout or an error.
+// runCommandTimeout is the default deadline for runCommand.
+const runCommandTimeout = 2 * time.Minute
+
+// runCommand executes a shell command with a 2-minute timeout.
+// It captures combined stdout+stderr so error messages are always available.
 func runCommand(name string, args ...string) (string, error) {
-	cmd := exec.Command(name, args...)
-	out, err := cmd.Output()
+	ctx, cancel := context.WithTimeout(context.Background(), runCommandTimeout)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, name, args...)
+	out, err := cmd.CombinedOutput()
 	return string(out), err
 }
 

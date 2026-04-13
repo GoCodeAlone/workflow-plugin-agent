@@ -134,6 +134,8 @@ func (s *BlackboardReadStep) Execute(ctx context.Context, pc *module.PipelineCon
 	}
 
 	if s.latestOnly {
+		// artifact_type is ignored when latest_only is true; ReadLatest returns
+		// the most recently written artifact for the phase regardless of type.
 		art, err := bb.ReadLatest(ctx, phase)
 		if err != nil {
 			return nil, fmt.Errorf("blackboard_read step %q: %w", s.name, err)

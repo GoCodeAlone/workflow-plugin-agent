@@ -154,7 +154,8 @@ func (g *GuardrailsModule) Defaults() GuardrailsDefaults {
 // --- executor.TrustEvaluator implementation ---
 
 // Evaluate implements executor.TrustEvaluator.
-// Checks whether a tool call is allowed by the default guardrails rules.
+// Checks whether a tool call is allowed using only the default rules (no scope matching).
+// Use CheckToolInScope for scope-aware evaluation.
 func (g *GuardrailsModule) Evaluate(_ context.Context, toolName string, _ map[string]any) executor.Action {
 	ok, _ := g.CheckTool(toolName)
 	if ok {
@@ -228,8 +229,12 @@ func checkToolAccess(toolName string, allowed, blocked []string) (bool, string) 
 	return false, "tool " + toolName + " not in allowed list"
 }
 
-// matchPattern matches a tool name against a glob-style pattern.
-// Supports * wildcard (single segment) and ** (multi-segment via path separator :).
+// matchPattern matches value against pattern using two rules:
+//  1. Exact match: pattern == value.
+//  2. Prefix match: if pattern ends with "*", the prefix before "*" must match the start of value
+//     (e.g. "mcp:wfctl:validate_*" matches "mcp:wfctl:validate_config").
+//
+// The standalone "*" and "**" patterns match any value.
 func matchPattern(pattern, value string) bool {
 	if pattern == "*" || pattern == "**" {
 		return true
@@ -319,8 +324,13 @@ func parseGuardrailsDefaults(cfg map[string]any) GuardrailsDefaults {
 	if v, ok := d["require_diff_review"].(bool); ok {
 		defaults.RequireDiffReview = v
 	}
-	if v, ok := d["max_iterations_per_cycle"].(int); ok {
+	switch v := d["max_iterations_per_cycle"].(type) {
+	case int:
 		defaults.MaxIterationsPerCycle = v
+	case int64:
+		defaults.MaxIterationsPerCycle = int(v)
+	case float64:
+		defaults.MaxIterationsPerCycle = int(v)
 	}
 	if v, ok := d["deploy_strategy"].(string); ok {
 		defaults.DeployStrategy = v
@@ -359,8 +369,13 @@ func parseCommandPolicy(cfg map[string]any) safety.Policy {
 	if v, ok := cfg["enable_static_analysis"].(bool); ok {
 		p.EnableStaticAnalysis = v
 	}
-	if v, ok := cfg["max_command_length"].(int); ok {
+	switch v := cfg["max_command_length"].(type) {
+	case int:
 		p.MaxCommandLength = v
+	case int64:
+		p.MaxCommandLength = int(v)
+	case float64:
+		p.MaxCommandLength = int(v)
 	}
 	if v, ok := cfg["allowed_commands"].([]any); ok {
 		p.AllowedCommands = nil

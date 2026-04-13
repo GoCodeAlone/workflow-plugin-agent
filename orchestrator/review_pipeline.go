@@ -46,6 +46,9 @@ func InjectBlackboardInput(ctx context.Context, app modular.Application, cfg Inp
 		return "", nil
 	}
 
+	if app == nil {
+		return "", nil
+	}
 	var bb *Blackboard
 	if svc, ok := app.SvcRegistry()["ratchet-blackboard"]; ok {
 		bb, _ = svc.(*Blackboard)
@@ -57,6 +60,23 @@ func InjectBlackboardInput(ctx context.Context, app modular.Application, cfg Inp
 	promptMode := cfg.InjectAs == "system_prompt_append" || cfg.InjectAs == "user_message"
 
 	if cfg.LatestOnly {
+		// When latest_only is true, filter by both phase and artifact_type (if provided)
+		// so we return the most recent artifact that matches both dimensions.
+		if cfg.ArtifactType != "" {
+			all, err := bb.Read(ctx, cfg.Phase, cfg.ArtifactType)
+			if err != nil {
+				return "", fmt.Errorf("input_from_blackboard: read latest phase %q type %q: %w", cfg.Phase, cfg.ArtifactType, err)
+			}
+			if len(all) == 0 {
+				return "", nil
+			}
+			art := all[len(all)-1]
+			if promptMode {
+				return fmt.Sprintf("[Blackboard artifact — phase: %s, type: %s]\n%v", art.Phase, art.Type, art.Content), nil
+			}
+			pc.Current["blackboard_input"] = artifactToMap(art)
+			return "", nil
+		}
 		art, err := bb.ReadLatest(ctx, cfg.Phase)
 		if err != nil {
 			return "", fmt.Errorf("input_from_blackboard: read latest phase %q: %w", cfg.Phase, err)

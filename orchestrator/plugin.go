@@ -763,7 +763,8 @@ func blackboardHook() plugin.WiringHook {
 
 			bb := NewBlackboard(db, hub)
 			if err := bb.Migrate(context.Background()); err != nil {
-				app.Logger().Warn("blackboard migrate failed", "error", err)
+				app.Logger().Error("blackboard migrate failed; skipping registration", "error", err)
+				return nil
 			}
 
 			_ = app.RegisterService("ratchet-blackboard", bb)
