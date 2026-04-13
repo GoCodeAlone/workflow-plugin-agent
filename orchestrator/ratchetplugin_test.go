@@ -1005,6 +1005,7 @@ func TestPlugin_ModuleFactories(t *testing.T) {
 		"ratchet.mcp_server",
 		"ratchet.tool_policy_engine",
 		"authz.casbin",
+		"agent.guardrails",
 	}
 	for _, name := range expected {
 		if _, ok := factories[name]; !ok {
@@ -1035,6 +1036,9 @@ func TestPlugin_StepFactories(t *testing.T) {
 		"step.jwt_generate", "step.jwt_decode",
 		"step.authz_check_casbin", "step.authz_add_policy",
 		"step.authz_remove_policy", "step.authz_role_assign",
+		"step.blackboard_post", "step.blackboard_read",
+		"step.self_improve_validate", "step.self_improve_diff",
+		"step.self_improve_deploy", "step.lsp_diagnose",
 	}
 	for _, name := range expected {
 		if _, ok := factories[name]; !ok {
@@ -1050,8 +1054,8 @@ func TestPlugin_WiringHooks(t *testing.T) {
 	p := New()
 	hooks := p.WiringHooks()
 
-	if len(hooks) != 19 {
-		t.Fatalf("expected 19 wiring hooks, got %d", len(hooks))
+	if len(hooks) != 20 {
+		t.Fatalf("expected 20 wiring hooks, got %d", len(hooks))
 	}
 
 	expectedNames := map[string]bool{
@@ -1074,6 +1078,7 @@ func TestPlugin_WiringHooks(t *testing.T) {
 		"ratchet.security_auditor":              false,
 		"ratchet.browser_manager":               false,
 		"ratchet.test_interaction":              false,
+		"ratchet.blackboard":                    false,
 	}
 	for _, h := range hooks {
 		if _, ok := expectedNames[h.Name]; !ok {

@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/GoCodeAlone/modular"
+	"github.com/GoCodeAlone/workflow-plugin-agent/executor"
 	"github.com/GoCodeAlone/workflow-plugin-agent/provider"
 	"github.com/GoCodeAlone/workflow-plugin-agent/orchestrator/tools"
 	agentplugin "github.com/GoCodeAlone/workflow-plugin-agent"
@@ -30,6 +31,8 @@ type AgentExecuteStep struct {
 	subAgentMaxDepth     int
 	compactionThreshold  float64
 	browserMaxTextLen    int
+	inputFromBlackboard  InputFromBlackboard
+	hasBlackboardInput   bool
 }
 
 func (s *AgentExecuteStep) Name() string { return s.name }
@@ -37,6 +40,21 @@ func (s *AgentExecuteStep) Name() string { return s.name }
 func (s *AgentExecuteStep) Execute(ctx context.Context, pc *module.PipelineContext) (*module.StepResult, error) {
 	if s.app == nil {
 		return nil, fmt.Errorf("agent_execute step %q: no application context", s.name)
+	}
+
+	// Blackboard input injection (default / pc.Current mode only).
+	// system_prompt_append and user_message modes are handled after systemPrompt is built.
+	var blackboardPromptContent string
+	if s.hasBlackboardInput {
+		content, err := InjectBlackboardInput(ctx, s.app, s.inputFromBlackboard, pc)
+		if err != nil {
+			// Non-fatal: log and continue without blackboard input
+			if logger := s.app.Logger(); logger != nil {
+				logger.Warn("agent_execute: blackboard input injection failed", "error", err, "step", s.name)
+			}
+		} else {
+			blackboardPromptContent = content
+		}
 	}
 
 	// Resolve AI provider via multiple paths:
@@ -120,6 +138,8 @@ func (s *AgentExecuteStep) Execute(ctx context.Context, pc *module.PipelineConte
 	if svc, ok := s.app.SvcRegistry()["ratchet-container-manager"]; ok {
 		containerMgr, _ = svc.(*ContainerManager)
 	}
+	// Look up guardrails module (optional). If present, tool calls are checked before execution.
+	guardrails := findGuardrailsModule(s.app)
 
 	// Extract agent and task data from pc.Current.
 	// The find-pending-task db_query step returns data under a "row" key,
@@ -218,10 +238,26 @@ func (s *AgentExecuteStep) Execute(ctx context.Context, pc *module.PipelineConte
 		}
 	}
 
+	// Apply blackboard content injection now that systemPrompt is fully built.
+	if blackboardPromptContent != "" {
+		switch s.inputFromBlackboard.InjectAs {
+		case "system_prompt_append":
+			systemPrompt = systemPrompt + "\n\n## Blackboard Context\n" + blackboardPromptContent
+		}
+	}
+
 	// Build initial conversation
 	messages := []provider.Message{
 		{Role: provider.RoleSystem, Content: systemPrompt},
 		{Role: provider.RoleUser, Content: fmt.Sprintf("Task for agent %q:\n\n%s", agentName, taskDescription)},
+	}
+
+	// Inject blackboard content as a user message (before the agent loop begins).
+	if blackboardPromptContent != "" && s.inputFromBlackboard.InjectAs == "user_message" {
+		messages = append(messages, provider.Message{
+			Role:    provider.RoleUser,
+			Content: "## Context from Blackboard\n" + blackboardPromptContent,
+		})
 	}
 
 	// Get tool definitions
@@ -348,18 +384,37 @@ func (s *AgentExecuteStep) Execute(ctx context.Context, pc *module.PipelineConte
 		for _, tc := range resp.ToolCalls {
 			var resultStr string
 			var isError bool
-			if toolRegistry != nil {
-				result, execErr := toolRegistry.Execute(toolCtx, tc.Name, tc.Arguments)
-				if execErr != nil {
-					resultStr = fmt.Sprintf("Error: %v", execErr)
+
+			// Guardrails check: validate tool access and command safety before execution.
+			if guardrails != nil {
+				action := guardrails.Evaluate(toolCtx, tc.Name, tc.Arguments)
+				if action == executor.ActionDeny {
+					resultStr = fmt.Sprintf("guardrails: tool %q is not permitted", tc.Name)
 					isError = true
-				} else {
-					resultBytes, _ := json.Marshal(result)
-					resultStr = string(resultBytes)
+				} else if cmdStr, _ := tc.Arguments["command"].(string); cmdStr != "" {
+					// For shell/bash tools, also check command safety.
+					cmdAction := guardrails.EvaluateCommand(cmdStr)
+					if cmdAction == executor.ActionDeny {
+						resultStr = fmt.Sprintf("guardrails: command blocked by safety policy")
+						isError = true
+					}
 				}
-			} else {
-				resultStr = "Tool execution not available"
-				isError = true
+			}
+
+			if !isError {
+				if toolRegistry != nil {
+					result, execErr := toolRegistry.Execute(toolCtx, tc.Name, tc.Arguments)
+					if execErr != nil {
+						resultStr = fmt.Sprintf("Error: %v", execErr)
+						isError = true
+					} else {
+						resultBytes, _ := json.Marshal(result)
+						resultStr = string(resultBytes)
+					}
+				} else {
+					resultStr = "Tool execution not available"
+					isError = true
+				}
 			}
 
 			// Handle approval gates: if the tool was request_approval, pause and wait.
@@ -556,6 +611,17 @@ func findSSEHub(app modular.Application) *SSEHub {
 	for _, svc := range app.SvcRegistry() {
 		if hub, ok := svc.(*SSEHub); ok {
 			return hub
+		}
+	}
+	return nil
+}
+
+// findGuardrailsModule searches the service registry for a GuardrailsModule instance.
+// Returns nil if no guardrails module is registered.
+func findGuardrailsModule(app modular.Application) *GuardrailsModule {
+	for _, svc := range app.SvcRegistry() {
+		if gm, ok := svc.(*GuardrailsModule); ok {
+			return gm
 		}
 	}
 	return nil
@@ -782,6 +848,9 @@ func newAgentExecuteStepFactory() plugin.StepFactory {
 			browserMaxTextLen = extractInt(raw, "max_text_length", 0)
 		}
 
+		// input_from_blackboard: optional config for reading blackboard artifacts into agent context.
+		ibb, hasIBB := parseInputFromBlackboard(cfg)
+
 		return &AgentExecuteStep{
 			name:                 name,
 			maxIterations:        maxIterations,
@@ -795,6 +864,8 @@ func newAgentExecuteStepFactory() plugin.StepFactory {
 			subAgentMaxDepth:     subAgentMaxDepth,
 			compactionThreshold:  compactionThreshold,
 			browserMaxTextLen:    browserMaxTextLen,
+			inputFromBlackboard:  ibb,
+			hasBlackboardInput:   hasIBB,
 		}, nil
 	}
 }

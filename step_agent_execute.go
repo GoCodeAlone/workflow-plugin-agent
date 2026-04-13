@@ -161,6 +161,18 @@ func (s *AgentExecuteStep) Execute(ctx context.Context, pc *module.PipelineConte
 	taskID := extractString(data, "task_id", extractString(data, "id", ""))
 	projectID := extractString(data, "project_id", "")
 
+	// Look up a TrustEvaluator (e.g. GuardrailsModule) from the service registry.
+	// Any registered service that satisfies executor.TrustEvaluator is used as the
+	// trust engine. This allows agent.guardrails modules to control tool access
+	// without a direct import of the orchestrator package.
+	var trustEngine executor.TrustEvaluator
+	for _, svc := range s.app.SvcRegistry() {
+		if te, ok := svc.(executor.TrustEvaluator); ok {
+			trustEngine = te
+			break
+		}
+	}
+
 	cfg := executor.Config{
 		Provider:            aiProvider,
 		ToolRegistry:        toolRegistry,
@@ -176,6 +188,7 @@ func (s *AgentExecuteStep) Execute(ctx context.Context, pc *module.PipelineConte
 		CompactionThreshold: s.compactionThreshold,
 		TaskID:              taskID,
 		ProjectID:           projectID,
+		TrustEngine:         trustEngine,
 	}
 
 	result, err := executor.Execute(ctx, cfg, systemPrompt, taskDescription, agentID)
