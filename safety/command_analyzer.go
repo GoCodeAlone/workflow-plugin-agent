@@ -104,16 +104,25 @@ func (a *CommandAnalyzer) Analyze(cmd string) (*CommandVerdict, error) {
 	// Walk AST and collect all command names and check for risks.
 	var commands []string
 	syntax.Walk(prog, func(node syntax.Node) bool {
-		if call, ok := node.(*syntax.CallExpr); ok && len(call.Args) > 0 {
-			cmdName := extractCommandName(call)
-			commands = append(commands, cmdName)
-			fullCmd := nodeToString(call)
-			a.checkDestructive(v, fullCmd, cmdName)
-		}
-		// Check pipe-to-shell
-		if binaryCmd, ok := node.(*syntax.BinaryCmd); ok {
-			if binaryCmd.Op == syntax.Pipe {
-				a.checkPipeToShell(v, binaryCmd)
+		switch n := node.(type) {
+		case *syntax.CallExpr:
+			if len(n.Args) > 0 {
+				cmdName := extractCommandName(n)
+				commands = append(commands, cmdName)
+				fullCmd := nodeToString(n)
+				a.checkDestructive(v, fullCmd, cmdName)
+			}
+		case *syntax.BinaryCmd:
+			if n.Op == syntax.Pipe {
+				a.checkPipeToShell(v, n)
+			}
+		case *syntax.Stmt:
+			if a.policy.EnableStaticAnalysis {
+				a.checkHereDocAndProcSubst(v, n)
+			}
+		case *syntax.SglQuoted:
+			if a.policy.EnableStaticAnalysis && n.Dollar {
+				a.checkVariableExpansion(v, n)
 			}
 		}
 		return true
@@ -219,6 +228,61 @@ func (a *CommandAnalyzer) checkScriptExecution(v *CommandVerdict, cmd string, _ 
 				Description: fmt.Sprintf("writes and executes a %s script", ext),
 			})
 		}
+	}
+}
+
+// checkHereDocAndProcSubst detects two patterns per Stmt:
+//  1. Here-doc fed directly to a shell: `bash << 'EOF' ... EOF`
+//  2. Process substitution as shell argument: `bash <(curl ...)`, `source <(wget ...)`
+func (a *CommandAnalyzer) checkHereDocAndProcSubst(v *CommandVerdict, stmt *syntax.Stmt) {
+	if !a.policy.BlockScriptExec {
+		return
+	}
+	call, ok := stmt.Cmd.(*syntax.CallExpr)
+	if !ok || len(call.Args) == 0 {
+		return
+	}
+	cmdName := extractCommandName(call)
+	shells := map[string]bool{
+		"sh": true, "bash": true, "zsh": true, "dash": true, "source": true, ".": true,
+	}
+
+	if !shells[cmdName] {
+		return
+	}
+
+	// Here-doc to shell: bash << 'EOF' or bash <<- EOF
+	for _, redir := range stmt.Redirs {
+		if redir.Op == syntax.Hdoc || redir.Op == syntax.DashHdoc {
+			v.Risks = append(v.Risks, Risk{
+				Type:        "script_execution",
+				Description: fmt.Sprintf("here-doc fed directly to %s", cmdName),
+			})
+		}
+	}
+
+	// Process substitution as argument: bash <(curl ...), source <(wget ...)
+	for _, arg := range call.Args[1:] {
+		for _, part := range arg.Parts {
+			if _, ok := part.(*syntax.ProcSubst); ok {
+				v.Risks = append(v.Risks, Risk{
+					Type:        "script_execution",
+					Description: fmt.Sprintf("process substitution used as input to %s", cmdName),
+				})
+			}
+		}
+	}
+}
+
+// checkVariableExpansion detects ANSI-C quoting ($'...') with hex or octal escape
+// sequences, a technique used to obfuscate command names (e.g. $'\x72\x6d' for rm).
+func (a *CommandAnalyzer) checkVariableExpansion(v *CommandVerdict, sq *syntax.SglQuoted) {
+	val := sq.Value
+	if strings.Contains(val, `\x`) || strings.Contains(val, `\0`) || strings.Contains(val, `\u`) {
+		v.Risks = append(v.Risks, Risk{
+			Type:        "variable_expansion",
+			Description: "ANSI-C quoting with hex/octal escapes may obfuscate commands",
+		})
 	}
 }
 

