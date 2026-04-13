@@ -43,6 +43,7 @@ type ToolRegistry struct {
 	mu           sync.RWMutex
 	tools        map[string]plugin.Tool
 	policyEngine *ToolPolicyEngine
+	paginator    *ResponsePaginator
 }
 
 func NewToolRegistry() *ToolRegistry {
@@ -56,6 +57,14 @@ func (tr *ToolRegistry) SetPolicyEngine(engine *ToolPolicyEngine) {
 	tr.mu.Lock()
 	defer tr.mu.Unlock()
 	tr.policyEngine = engine
+}
+
+// SetPaginator attaches a ResponsePaginator that will be applied to large string
+// tool results before they are returned to the agent loop.
+func (tr *ToolRegistry) SetPaginator(rp *ResponsePaginator) {
+	tr.mu.Lock()
+	defer tr.mu.Unlock()
+	tr.paginator = rp
 }
 
 // Register adds a tool to the registry.
@@ -116,6 +125,7 @@ func (tr *ToolRegistry) Execute(ctx context.Context, name string, args map[strin
 	tr.mu.RLock()
 	t, ok := tr.tools[name]
 	pe := tr.policyEngine
+	rp := tr.paginator
 	var snapshot map[string]plugin.Tool
 	if !ok {
 		snapshot = make(map[string]plugin.Tool, len(tr.tools))
@@ -151,7 +161,13 @@ func (tr *ToolRegistry) Execute(ctx context.Context, name string, args map[strin
 		return nil, fmt.Errorf("tool %q denied by policy: %s", name, reason)
 	}
 
-	return t.Execute(ctx, args)
+	result, err := t.Execute(ctx, args)
+	if err == nil && rp != nil {
+		if s, ok := result.(string); ok {
+			result = rp.Paginate(name, args, s)
+		}
+	}
+	return result, err
 }
 
 // Names returns all registered tool names.
