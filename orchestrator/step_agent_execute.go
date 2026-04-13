@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/GoCodeAlone/modular"
+	"github.com/GoCodeAlone/workflow-plugin-agent/executor"
 	"github.com/GoCodeAlone/workflow-plugin-agent/provider"
 	"github.com/GoCodeAlone/workflow-plugin-agent/orchestrator/tools"
 	agentplugin "github.com/GoCodeAlone/workflow-plugin-agent"
@@ -367,13 +368,13 @@ func (s *AgentExecuteStep) Execute(ctx context.Context, pc *module.PipelineConte
 			// Guardrails check: validate tool access and command safety before execution.
 			if guardrails != nil {
 				action := guardrails.Evaluate(toolCtx, tc.Name, tc.Arguments)
-				if string(action) == "deny" {
+				if action == executor.ActionDeny {
 					resultStr = fmt.Sprintf("guardrails: tool %q is not permitted", tc.Name)
 					isError = true
 				} else if cmdStr, _ := tc.Arguments["command"].(string); cmdStr != "" {
 					// For shell/bash tools, also check command safety.
 					cmdAction := guardrails.EvaluateCommand(cmdStr)
-					if string(cmdAction) == "deny" {
+					if cmdAction == executor.ActionDeny {
 						resultStr = fmt.Sprintf("guardrails: command blocked by safety policy")
 						isError = true
 					}

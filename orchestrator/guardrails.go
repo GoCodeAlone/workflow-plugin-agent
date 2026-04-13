@@ -6,7 +6,6 @@ import (
 
 	"github.com/GoCodeAlone/modular"
 	"github.com/GoCodeAlone/workflow-plugin-agent/executor"
-	"github.com/GoCodeAlone/workflow-plugin-agent/policy"
 	"github.com/GoCodeAlone/workflow-plugin-agent/safety"
 	"github.com/GoCodeAlone/workflow/plugin"
 )
@@ -243,7 +242,6 @@ func matchPattern(pattern, value string) bool {
 		prefix := strings.TrimSuffix(pattern, "*")
 		return strings.HasPrefix(value, prefix)
 	}
-	// Also handle "prefix/*" → allow any suffix after "prefix/"
 	return false
 }
 
@@ -454,9 +452,3 @@ func parseOverrideConfig(cfg map[string]any) OverrideConfig {
 	return oc
 }
 
-// Action wraps policy.Action with a String() method for test assertions.
-type guardrailsAction struct {
-	a policy.Action
-}
-
-func (ga guardrailsAction) String() string { return string(ga.a) }
