@@ -1054,8 +1054,8 @@ func TestPlugin_WiringHooks(t *testing.T) {
 	p := New()
 	hooks := p.WiringHooks()
 
-	if len(hooks) != 20 {
-		t.Fatalf("expected 20 wiring hooks, got %d", len(hooks))
+	if len(hooks) != 21 {
+		t.Fatalf("expected 21 wiring hooks, got %d", len(hooks))
 	}
 
 	expectedNames := map[string]bool{
@@ -1079,6 +1079,7 @@ func TestPlugin_WiringHooks(t *testing.T) {
 		"ratchet.browser_manager":               false,
 		"ratchet.test_interaction":              false,
 		"ratchet.blackboard":                    false,
+		"ratchet.mcp_tools_wiring":              false,
 	}
 	for _, h := range hooks {
 		if _, ok := expectedNames[h.Name]; !ok {
