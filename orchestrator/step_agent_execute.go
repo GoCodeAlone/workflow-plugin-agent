@@ -289,8 +289,15 @@ func (s *AgentExecuteStep) Execute(ctx context.Context, pc *module.PipelineConte
 		}
 	}
 
+	// Detect if provider manages server-side context (sends only delta messages).
+	var contextStrategy provider.ContextStrategy
+	if cs, ok := aiProvider.(provider.ContextStrategy); ok && cs.ManagesContext() {
+		contextStrategy = cs
+	}
+
 	var finalContent string
 	iterCount := 0
+	lastSentIndex := 0
 	ld := NewLoopDetector(s.loopDetectorCfg)
 	cm := NewContextManager(aiProvider.Name(), s.compactionThreshold)
 
@@ -311,7 +318,13 @@ func (s *AgentExecuteStep) Execute(ctx context.Context, pc *module.PipelineConte
 					)
 				}
 			}
+			if contextStrategy != nil {
+				_ = contextStrategy.ResetContext(ctx)
+			}
 			messages = cm.Compact(ctx, messages, aiProvider)
+			if contextStrategy != nil {
+				lastSentIndex = 0 // resend full compacted history after reset
+			}
 			if recorder != nil {
 				_ = recorder.Record(ctx, TranscriptEntry{
 					ID:        uuid.New().String(),
@@ -335,7 +348,15 @@ func (s *AgentExecuteStep) Execute(ctx context.Context, pc *module.PipelineConte
 			}
 		}
 
-		resp, err := aiProvider.Chat(ctx, messages, toolDefs)
+		// For stateful providers, send only new messages since the last call.
+		chatMessages := messages
+		if contextStrategy != nil {
+			chatMessages = messages[lastSentIndex:]
+		}
+		resp, err := aiProvider.Chat(ctx, chatMessages, toolDefs)
+		if contextStrategy != nil {
+			lastSentIndex = len(messages)
+		}
 		if err != nil {
 			// Don't abort the pipeline — return a failed result so the task can be marked.
 			errMsg := fmt.Sprintf("LLM call failed at iteration %d: %v", iterCount, err)
