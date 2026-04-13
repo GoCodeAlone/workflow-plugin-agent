@@ -41,8 +41,8 @@ func New() *RatchetPlugin {
 				Author:      "GoCodeAlone",
 				Description: "Ratchet autonomous agent orchestration plugin",
 				ModuleTypes: []string{"agent.provider", "ratchet.sse_hub", "ratchet.scheduler", "ratchet.mcp_client", "ratchet.mcp_server", "authz.casbin"},
-				StepTypes:   []string{"step.agent_execute", "step.provider_test", "step.provider_models", "step.model_pull", "step.workspace_init", "step.container_control", "step.secret_manage", "step.vault_config", "step.mcp_reload", "step.oauth_exchange", "step.approval_resolve", "step.webhook_process", "step.security_audit", "step.test_interact", "step.human_request_resolve", "step.memory_extract", "step.bcrypt_check", "step.bcrypt_hash", "step.jwt_generate", "step.jwt_decode"},
-				WiringHooks: []string{"agent.provider_registry", "ratchet.sse_route_registration", "ratchet.mcp_server_route_registration", "ratchet.db_init", "ratchet.auth_token", "ratchet.secrets_guard", "ratchet.provider_registry", "ratchet.tool_policy_engine", "ratchet.sub_agent_manager", "ratchet.tool_registry", "ratchet.container_manager", "ratchet.transcript_recorder", "ratchet.skill_manager", "ratchet.approval_manager", "ratchet.human_request_manager", "ratchet.webhook_manager", "ratchet.security_auditor", "ratchet.browser_manager", "ratchet.test_interaction"},
+				StepTypes:   []string{"step.agent_execute", "step.provider_test", "step.provider_models", "step.model_pull", "step.workspace_init", "step.container_control", "step.secret_manage", "step.vault_config", "step.mcp_reload", "step.oauth_exchange", "step.approval_resolve", "step.webhook_process", "step.security_audit", "step.test_interact", "step.human_request_resolve", "step.memory_extract", "step.bcrypt_check", "step.bcrypt_hash", "step.jwt_generate", "step.jwt_decode", "step.blackboard_post", "step.blackboard_read"},
+				WiringHooks: []string{"agent.provider_registry", "ratchet.sse_route_registration", "ratchet.mcp_server_route_registration", "ratchet.db_init", "ratchet.auth_token", "ratchet.secrets_guard", "ratchet.provider_registry", "ratchet.tool_policy_engine", "ratchet.sub_agent_manager", "ratchet.tool_registry", "ratchet.container_manager", "ratchet.transcript_recorder", "ratchet.skill_manager", "ratchet.approval_manager", "ratchet.human_request_manager", "ratchet.webhook_manager", "ratchet.security_auditor", "ratchet.browser_manager", "ratchet.test_interaction", "ratchet.blackboard"},
 			},
 		},
 	}
@@ -96,6 +96,8 @@ func (p *RatchetPlugin) StepFactories() map[string]plugin.StepFactory {
 		"step.bcrypt_hash":           newBcryptHashFactory(),
 		"step.jwt_generate":          newJWTGenerateFactory(),
 		"step.jwt_decode":            newJWTDecodeFactory(),
+		"step.blackboard_post":       newBlackboardPostFactory(),
+		"step.blackboard_read":       newBlackboardReadFactory(),
 	}
 
 	// Merge in authz step factories (step.authz_check_casbin, step.authz_add_policy, etc.)
@@ -130,6 +132,7 @@ func (p *RatchetPlugin) WiringHooks() []plugin.WiringHook {
 		securityAuditorHook(),
 		browserManagerHook(),
 		testInteractionHook(),
+		blackboardHook(),
 	}
 }
 
@@ -723,6 +726,42 @@ func testInteractionHook() plugin.WiringHook {
 
 				app.Logger().Info("test interaction hook: registered HTTPSource for test provider")
 			}
+			return nil
+		},
+	}
+}
+
+// blackboardHook creates a Blackboard backed by the ratchet-db and optionally
+// wired to the SSE hub, then registers it under "ratchet-blackboard".
+func blackboardHook() plugin.WiringHook {
+	return plugin.WiringHook{
+		Name:     "ratchet.blackboard",
+		Priority: 70,
+		Hook: func(app modular.Application, _ *config.WorkflowConfig) error {
+			var db *sql.DB
+			if svc, ok := app.SvcRegistry()["ratchet-db"]; ok {
+				if dbp, ok := svc.(module.DBProvider); ok {
+					db = dbp.DB()
+				}
+			}
+			if db == nil {
+				return nil // no DB, skip
+			}
+
+			var hub *SSEHub
+			for _, svc := range app.SvcRegistry() {
+				if h, ok := svc.(*SSEHub); ok {
+					hub = h
+					break
+				}
+			}
+
+			bb := NewBlackboard(db, hub)
+			if err := bb.Migrate(context.Background()); err != nil {
+				app.Logger().Warn("blackboard migrate failed", "error", err)
+			}
+
+			_ = app.RegisterService("ratchet-blackboard", bb)
 			return nil
 		},
 	}
