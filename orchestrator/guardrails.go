@@ -153,22 +153,22 @@ func (g *GuardrailsModule) Defaults() GuardrailsDefaults {
 }
 
 // FilterTools returns only the tool definitions allowed by the guardrails default rules.
-// If no allowed_tools patterns are configured, all tools are passed through.
+// Blocked tools are excluded first (blocked wins), then allowed patterns are applied.
+// If neither list is configured, all tools are passed through.
 func (g *GuardrailsModule) FilterTools(tools []provider.ToolDef) []provider.ToolDef {
 	if g == nil {
 		return tools
 	}
-	patterns := g.defaults.AllowedTools
-	if len(patterns) == 0 {
+	allowed := g.defaults.AllowedTools
+	blocked := g.defaults.BlockedTools
+	if len(allowed) == 0 && len(blocked) == 0 {
 		return tools
 	}
 	var filtered []provider.ToolDef
 	for _, t := range tools {
-		for _, pattern := range patterns {
-			if matchPattern(pattern, t.Name) {
-				filtered = append(filtered, t)
-				break
-			}
+		ok, _ := checkToolAccess(t.Name, allowed, blocked)
+		if ok {
+			filtered = append(filtered, t)
 		}
 	}
 	return filtered

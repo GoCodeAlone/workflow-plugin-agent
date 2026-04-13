@@ -39,6 +39,39 @@ func TestGuardrails_FilterTools(t *testing.T) {
 	}
 }
 
+func TestGuardrails_FilterTools_BlockedWinsOverAllowStar(t *testing.T) {
+	// allow-all + block-specific: blocked tools must not appear in filtered set.
+	g := &GuardrailsModule{
+		name: "guardrails",
+		defaults: GuardrailsDefaults{
+			AllowedTools: []string{"*"},
+			BlockedTools: []string{"shell_exec", "git_push"},
+		},
+		analyzer: safety.NewCommandAnalyzer(safety.DefaultPolicy()),
+	}
+
+	tools := []provider.ToolDef{
+		{Name: "file_read"},
+		{Name: "shell_exec"},
+		{Name: "git_push"},
+		{Name: "file_write"},
+	}
+
+	filtered := g.FilterTools(tools)
+	for _, tool := range filtered {
+		if tool.Name == "shell_exec" || tool.Name == "git_push" {
+			t.Errorf("blocked tool %q should not appear in filtered list", tool.Name)
+		}
+	}
+	if len(filtered) != 2 {
+		names := make([]string, len(filtered))
+		for i, x := range filtered {
+			names[i] = x.Name
+		}
+		t.Errorf("expected 2 tools (file_read, file_write), got %d: %v", len(filtered), names)
+	}
+}
+
 func TestGuardrails_FilterTools_NoAllowList(t *testing.T) {
 	g := &GuardrailsModule{
 		name:     "guardrails",
