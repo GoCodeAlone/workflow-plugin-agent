@@ -2,13 +2,16 @@ package orchestrator
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log"
+	"sort"
+	"strings"
 	"sync"
 
+	"github.com/GoCodeAlone/workflow-plugin-agent/orchestrator/tools"
 	"github.com/GoCodeAlone/workflow-plugin-agent/plugin"
 	"github.com/GoCodeAlone/workflow-plugin-agent/provider"
-	"github.com/GoCodeAlone/workflow-plugin-agent/orchestrator/tools"
 )
 
 // agentIDFromToolCtx reads the agent ID set by tools.WithAgentID so that
@@ -115,7 +118,19 @@ func (tr *ToolRegistry) Execute(ctx context.Context, name string, args map[strin
 	pe := tr.policyEngine
 	tr.mu.RUnlock()
 	if !ok {
-		return nil, fmt.Errorf("tool %q not found in registry", name)
+		suggestion := suggestTool(name, tr.tools)
+		msg := fmt.Sprintf("tool %q not found in registry", name)
+		if suggestion != "" {
+			if st, exists := tr.tools[suggestion]; exists {
+				def := st.Definition()
+				paramBytes, _ := json.Marshal(def.Parameters)
+				msg += fmt.Sprintf(". Did you mean %q? Parameters: %s", suggestion, string(paramBytes))
+			}
+		}
+		names := toolNames(tr.tools)
+		sort.Strings(names)
+		msg += fmt.Sprintf(". Available tools: %s", strings.Join(names, ", "))
+		return nil, fmt.Errorf("%s", msg)
 	}
 
 	if pe == nil {

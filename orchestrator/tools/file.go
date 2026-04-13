@@ -32,7 +32,8 @@ func validatePath(workspace, relPath string) (string, error) {
 		return "", fmt.Errorf("invalid workspace: %w", err)
 	}
 	if !strings.HasPrefix(absResolved, wsResolved+string(filepath.Separator)) && absResolved != wsResolved {
-		return "", fmt.Errorf("path traversal not allowed: %s", relPath)
+		return "", fmt.Errorf("path traversal not allowed: %s. Workspace is %q — use paths like %q",
+			relPath, workspace, filepath.Join(workspace, "data/config/app.yaml"))
 	}
 	return absResolved, nil
 }
@@ -103,6 +104,11 @@ func (t *FileWriteTool) Execute(ctx context.Context, args map[string]any) (any, 
 	content, _ := args["content"].(string)
 	if path == "" {
 		return nil, fmt.Errorf("path is required")
+	}
+	if isPlaceholder, reason := DetectPlaceholder(content); isPlaceholder {
+		return nil, fmt.Errorf("file_write content appears to be a placeholder (%s). "+
+			"Provide the actual file content. If you read a file with file_read, "+
+			"modify that content and pass the modified version to file_write", reason)
 	}
 	workspace := t.Workspace
 	if ws, ok := WorkspacePathFromContext(ctx); ok {
