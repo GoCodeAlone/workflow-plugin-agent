@@ -30,6 +30,8 @@ type AgentExecuteStep struct {
 	subAgentMaxDepth     int
 	compactionThreshold  float64
 	browserMaxTextLen    int
+	inputFromBlackboard  InputFromBlackboard
+	hasBlackboardInput   bool
 }
 
 func (s *AgentExecuteStep) Name() string { return s.name }
@@ -37,6 +39,17 @@ func (s *AgentExecuteStep) Name() string { return s.name }
 func (s *AgentExecuteStep) Execute(ctx context.Context, pc *module.PipelineContext) (*module.StepResult, error) {
 	if s.app == nil {
 		return nil, fmt.Errorf("agent_execute step %q: no application context", s.name)
+	}
+
+	// Blackboard input injection: read artifact(s) from the blackboard and inject
+	// into pc.Current before the agent loop begins.
+	if s.hasBlackboardInput {
+		if err := InjectBlackboardInput(ctx, s.app, s.inputFromBlackboard, pc); err != nil {
+			// Non-fatal: log and continue without blackboard input
+			if logger := s.app.Logger(); logger != nil {
+				logger.Warn("agent_execute: blackboard input injection failed", "error", err, "step", s.name)
+			}
+		}
 	}
 
 	// Resolve AI provider via multiple paths:
@@ -814,6 +827,9 @@ func newAgentExecuteStepFactory() plugin.StepFactory {
 			browserMaxTextLen = extractInt(raw, "max_text_length", 0)
 		}
 
+		// input_from_blackboard: optional config for reading blackboard artifacts into agent context.
+		ibb, hasIBB := parseInputFromBlackboard(cfg)
+
 		return &AgentExecuteStep{
 			name:                 name,
 			maxIterations:        maxIterations,
@@ -827,6 +843,8 @@ func newAgentExecuteStepFactory() plugin.StepFactory {
 			subAgentMaxDepth:     subAgentMaxDepth,
 			compactionThreshold:  compactionThreshold,
 			browserMaxTextLen:    browserMaxTextLen,
+			inputFromBlackboard:  ibb,
+			hasBlackboardInput:   hasIBB,
 		}, nil
 	}
 }

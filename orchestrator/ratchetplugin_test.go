@@ -1037,6 +1037,8 @@ func TestPlugin_StepFactories(t *testing.T) {
 		"step.authz_check_casbin", "step.authz_add_policy",
 		"step.authz_remove_policy", "step.authz_role_assign",
 		"step.blackboard_post", "step.blackboard_read",
+		"step.self_improve_validate", "step.self_improve_diff",
+		"step.self_improve_deploy", "step.lsp_diagnose",
 	}
 	for _, name := range expected {
 		if _, ok := factories[name]; !ok {
