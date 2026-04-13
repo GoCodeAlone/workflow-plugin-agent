@@ -323,7 +323,14 @@ func (s *AgentExecuteStep) Execute(ctx context.Context, pc *module.PipelineConte
 				}
 			}
 			if contextStrategy != nil {
-				_ = contextStrategy.ResetContext(ctx)
+				if resetErr := contextStrategy.ResetContext(ctx); resetErr != nil {
+					if s.app != nil {
+						if logger := s.app.Logger(); logger != nil {
+							logger.Warn("agent_execute: context reset failed",
+								"agent", agentName, "error", resetErr)
+						}
+					}
+				}
 			}
 			messages = cm.Compact(ctx, messages, aiProvider)
 			if contextStrategy != nil {
