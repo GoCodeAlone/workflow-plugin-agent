@@ -2,7 +2,11 @@ package genkit
 
 import (
 	"context"
+	"strings"
 	"testing"
+
+	"github.com/GoCodeAlone/workflow-plugin-agent/provider"
+	ollamaPlugin "github.com/firebase/genkit/go/plugins/ollama"
 )
 
 func TestNewAnthropicProvider_MissingKey(t *testing.T) {
@@ -87,4 +91,46 @@ func TestProviderImplementsInterface(t *testing.T) {
 		t.Skip("factory failed, skipping interface check")
 	}
 	_ = p // already provider.Provider; compile verifies interface
+}
+
+func TestNewOllamaProvider_GemmaToolSupport(t *testing.T) {
+	// gemma4 is NOT in the Genkit Ollama plugin's hardcoded toolSupportedModels list.
+	// NewOllamaProvider must explicitly define the model with Tools:true so that
+	// Chat() with tools does not fail with "model does not support tool use".
+	p, err := NewOllamaProvider(context.Background(), "gemma4:e2b", "http://127.0.0.1:1", 0)
+	if err != nil {
+		t.Fatalf("unexpected creation error: %v", err)
+	}
+	gp, ok := p.(*genkitProvider)
+	if !ok {
+		t.Fatalf("expected *genkitProvider, got %T", p)
+	}
+
+	// Verify model is pre-registered in the Genkit instance.
+	// ollamaPlugin.IsDefinedModel calls LookupModel which triggers dynamic resolution;
+	// after explicit DefineModel this should always be true.
+	if !ollamaPlugin.IsDefinedModel(gp.g, "gemma4:e2b") {
+		t.Error("model 'gemma4:e2b' not defined in Genkit instance")
+	}
+
+	// Calling Chat with tools must fail with a connection error — NOT a
+	// "does not support tool use" validation error.  The latter would mean the
+	// model was registered with Tools:false (e.g. via DefineModel with nil opts,
+	// which would check toolSupportedModels and exclude gemma4).
+	tools := []provider.ToolDef{{
+		Name:        "file_read",
+		Description: "Read a file",
+		Parameters:  map[string]any{"type": "object", "properties": map[string]any{}},
+	}}
+	_, err = gp.Chat(context.Background(),
+		[]provider.Message{{Role: provider.RoleUser, Content: "test"}},
+		tools,
+	)
+	// Expect an error (no server), but NOT a "does not support tool use" validation error.
+	if err == nil {
+		t.Fatal("expected error (no server running)")
+	}
+	if strings.Contains(err.Error(), "does not support tool use") {
+		t.Errorf("model should support tools but got: %v", err)
+	}
 }
