@@ -1179,24 +1179,19 @@ func TestAgentExecuteStepFactory_WorkspaceConfig(t *testing.T) {
 }
 
 func TestAgentExecuteStep_WorkspaceInjectedIntoContext(t *testing.T) {
-	// Verify that the workspace from step config is injected into the tool context
-	// when there is no DB project workspace. The file tool should use it.
+	// Verify that the workspace from step config is injected into the tool context.
+	// The provider emits a capture_workspace tool call on the first turn so the
+	// tool actually executes and we can assert the context value was set correctly.
 	db := openTestDB(t)
 	initTranscriptsTable(t, db)
 
 	ws := t.TempDir()
-	configContent := "modules: []"
-	configFile := ws + "/app.yaml"
-	if err := os.WriteFile(configFile, []byte(configContent), 0o644); err != nil {
-		t.Fatalf("write config: %v", err)
-	}
 
-	// The mock provider just completes — we verify workspace injection via
-	// a captured-context tool registered in the registry.
 	var capturedWorkspace string
 	captureTool := &captureWorkspaceTool{capture: &capturedWorkspace}
 
-	mp := &mockProvider{responses: []string{"Done."}}
+	// toolCallOnceProvider emits a single tool call on turn 1, then "Done." on turn 2.
+	mp := &toolCallOnceProvider{toolName: "capture_workspace"}
 	providerMod := &AIProviderModule{name: "ratchet-ai", provider: mp}
 	sg := NewSecretGuard(&mockSecretsProvider{secrets: map[string]string{}}, "test")
 	rec := NewTranscriptRecorder(db, sg)
@@ -1234,11 +1229,58 @@ func TestAgentExecuteStep_WorkspaceInjectedIntoContext(t *testing.T) {
 		t.Fatalf("Execute: %v", err)
 	}
 
-	// The capture tool records the workspace from context during Execute.
-	// Since the mock provider doesn't emit tool calls, the tool isn't invoked;
-	// instead we verify the step stores workspace correctly (tested above via factory test).
-	// This test mainly validates the full Execute path doesn't break.
-	_ = capturedWorkspace
+	// The capture tool should have been invoked and recorded the workspace path.
+	if capturedWorkspace != ws {
+		t.Errorf("workspace not injected into tool context: got %q, want %q", capturedWorkspace, ws)
+	}
+}
+
+// toolCallOnceProvider emits a single named tool call on the first Chat turn,
+// then returns "Done." on all subsequent turns.
+type toolCallOnceProvider struct {
+	toolName string
+	called   bool
+	mu       sync.Mutex
+}
+
+func (p *toolCallOnceProvider) Name() string { return "toolcall-once" }
+
+func (p *toolCallOnceProvider) Chat(_ context.Context, _ []provider.Message, _ []provider.ToolDef) (*provider.Response, error) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if !p.called {
+		p.called = true
+		return &provider.Response{
+			ToolCalls: []provider.ToolCall{{
+				ID:        "tc-capture",
+				Name:      p.toolName,
+				Arguments: map[string]any{},
+			}},
+		}, nil
+	}
+	return &provider.Response{Content: "Done."}, nil
+}
+
+func (p *toolCallOnceProvider) Stream(ctx context.Context, msgs []provider.Message, defs []provider.ToolDef) (<-chan provider.StreamEvent, error) {
+	resp, err := p.Chat(ctx, msgs, defs)
+	if err != nil {
+		return nil, err
+	}
+	ch := make(chan provider.StreamEvent, 2+len(resp.ToolCalls))
+	if resp.Content != "" {
+		ch <- provider.StreamEvent{Type: "text", Text: resp.Content}
+	}
+	for i := range resp.ToolCalls {
+		ch <- provider.StreamEvent{Type: "tool_call", Tool: &resp.ToolCalls[i]}
+	}
+	usage := resp.Usage
+	ch <- provider.StreamEvent{Type: "done", Usage: &usage}
+	close(ch)
+	return ch, nil
+}
+
+func (p *toolCallOnceProvider) AuthModeInfo() provider.AuthModeInfo {
+	return provider.AuthModeInfo{Mode: "none", DisplayName: "ToolCallOnce (test)"}
 }
 
 // captureWorkspaceTool is a test tool that captures workspace from context.
