@@ -3,6 +3,7 @@ package orchestrator
 import (
 	"context"
 	"fmt"
+	"os"
 	"reflect"
 	"strings"
 
@@ -24,10 +25,11 @@ type ImmutabilityViolation struct {
 //  2. Immutability constraints (if a GuardrailsModule is registered)
 //  3. MCP-based wfctl validation (if an MCP provider is available)
 type SelfImproveValidateStep struct {
-	name         string
-	proposedKey  string // key in pc.Current holding proposed YAML (default: "proposed_yaml")
-	currentKey   string // key in pc.Current holding current YAML (default: "current_yaml")
-	app          modular.Application
+	name             string
+	proposedKey      string // key in pc.Current holding proposed YAML (default: "proposed_yaml")
+	currentKey       string // key in pc.Current holding current YAML (default: "current_yaml")
+	proposedYAMLFile string // file path to read proposed YAML from (overrides proposedKey if set)
+	app              modular.Application
 }
 
 func (s *SelfImproveValidateStep) Name() string { return s.name }
@@ -42,7 +44,16 @@ func (s *SelfImproveValidateStep) Execute(ctx context.Context, pc *module.Pipeli
 		currentKey = "current_yaml"
 	}
 
-	proposedYAML := extractString(pc.Current, proposedKey, "")
+	var proposedYAML string
+	if s.proposedYAMLFile != "" {
+		data, err := os.ReadFile(s.proposedYAMLFile)
+		if err != nil {
+			return nil, fmt.Errorf("self_improve_validate step %q: reading proposed_yaml_file %q: %w", s.name, s.proposedYAMLFile, err)
+		}
+		proposedYAML = string(data)
+	} else {
+		proposedYAML = extractString(pc.Current, proposedKey, "")
+	}
 	if strings.TrimSpace(proposedYAML) == "" || proposedYAML == "<no value>" {
 		return nil, fmt.Errorf("self_improve_validate step %q: proposed_yaml is empty or not set", s.name)
 	}
@@ -166,11 +177,13 @@ func newSelfImproveValidateFactory() plugin.StepFactory {
 	return func(name string, cfg map[string]any, app modular.Application) (any, error) {
 		proposedKey, _ := cfg["proposed_key"].(string)
 		currentKey, _ := cfg["current_key"].(string)
+		proposedYAMLFile, _ := cfg["proposed_yaml_file"].(string)
 		return &SelfImproveValidateStep{
-			name:        name,
-			proposedKey: proposedKey,
-			currentKey:  currentKey,
-			app:         app,
+			name:             name,
+			proposedKey:      proposedKey,
+			currentKey:       currentKey,
+			proposedYAMLFile: proposedYAMLFile,
+			app:              app,
 		}, nil
 	}
 }

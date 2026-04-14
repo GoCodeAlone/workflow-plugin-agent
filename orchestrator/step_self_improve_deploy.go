@@ -32,12 +32,13 @@ const (
 //	branch_prefix string — git branch prefix for git_pr strategy (default: "self-improve/")
 //	skip_validation bool — skip the pre-deploy validation gate (not recommended)
 type SelfImproveDeployStep struct {
-	name           string
-	strategy       DeployStrategy
-	proposedKey    string
-	branchPrefix   string
-	skipValidation bool
-	app            modular.Application
+	name             string
+	strategy         DeployStrategy
+	proposedKey      string
+	branchPrefix     string
+	skipValidation   bool
+	proposedYAMLFile string // file path to read proposed YAML from (overrides proposedKey if set)
+	app              modular.Application
 }
 
 func (s *SelfImproveDeployStep) Name() string { return s.name }
@@ -48,7 +49,16 @@ func (s *SelfImproveDeployStep) Execute(ctx context.Context, pc *module.Pipeline
 		proposedKey = "proposed_yaml"
 	}
 
-	proposedYAML := extractString(pc.Current, proposedKey, "")
+	var proposedYAML string
+	if s.proposedYAMLFile != "" {
+		data, err := os.ReadFile(s.proposedYAMLFile)
+		if err != nil {
+			return nil, fmt.Errorf("self_improve_deploy step %q: reading proposed_yaml_file %q: %w", s.name, s.proposedYAMLFile, err)
+		}
+		proposedYAML = string(data)
+	} else {
+		proposedYAML = extractString(pc.Current, proposedKey, "")
+	}
 	if proposedYAML == "" {
 		return nil, fmt.Errorf("self_improve_deploy step %q: %q is required", s.name, proposedKey)
 	}
@@ -291,13 +301,15 @@ func newSelfImproveDeployFactory() plugin.StepFactory {
 		proposedKey, _ := cfg["proposed_key"].(string)
 		branchPrefix, _ := cfg["branch_prefix"].(string)
 		skipValidation, _ := cfg["skip_validation"].(bool)
+		proposedYAMLFile, _ := cfg["proposed_yaml_file"].(string)
 		return &SelfImproveDeployStep{
-			name:           name,
-			strategy:       DeployStrategy(strategy),
-			proposedKey:    proposedKey,
-			branchPrefix:   branchPrefix,
-			skipValidation: skipValidation,
-			app:            app,
+			name:             name,
+			strategy:         DeployStrategy(strategy),
+			proposedKey:      proposedKey,
+			branchPrefix:     branchPrefix,
+			skipValidation:   skipValidation,
+			proposedYAMLFile: proposedYAMLFile,
+			app:              app,
 		}, nil
 	}
 }
