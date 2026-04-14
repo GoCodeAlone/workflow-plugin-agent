@@ -76,6 +76,9 @@ func (rp *ResponsePaginator) getPage(toolName string, args map[string]any, pageV
 }
 
 func (rp *ResponsePaginator) formatPage(lines []string, page int) string {
+	if page < 1 {
+		return "[invalid page number: must be >= 1]"
+	}
 	start := (page - 1) * rp.pageSize
 	totalPages := (len(lines) + rp.pageSize - 1) / rp.pageSize
 	if start >= len(lines) {

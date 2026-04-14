@@ -301,6 +301,7 @@ func (s *AgentExecuteStep) Execute(ctx context.Context, pc *module.PipelineConte
 	lastSentIndex := 0
 	emptyRetries := 0
 	intentRetries := 0
+	seqRetries := 0
 	ld := NewLoopDetector(s.loopDetectorCfg)
 	cm := NewContextManager(aiProvider.Name(), s.compactionThreshold)
 	// If the provider reports its own context window, use that for compaction.
@@ -469,26 +470,39 @@ func (s *AgentExecuteStep) Execute(ctx context.Context, pc *module.PipelineConte
 
 		// In sequential mode, reject multiple tool calls and ask the LLM to resend only one.
 		if !s.parallelToolCalls && len(resp.ToolCalls) > 1 {
-			errMsg := fmt.Sprintf(
-				"[SYSTEM] You sent %d tool calls in one turn, but this agent requires sequential execution. "+
-					"Call ONE tool at a time and wait for its result. "+
-					"Your first intended call was %q — resend it as the only tool call.",
-				len(resp.ToolCalls), resp.ToolCalls[0].Name,
-			)
-			messages = append(messages, provider.Message{
-				Role:      provider.RoleAssistant,
-				Content:   resp.Content,
-				ToolCalls: resp.ToolCalls,
-			})
-			messages = append(messages, provider.Message{
-				Role:    provider.RoleUser,
-				Content: errMsg,
-			})
-			iterCount-- // correction turn; don't count toward max_iterations
-			continue
+			seqRetries++
+			if seqRetries > 5 {
+				// Model persistently sends multiple calls — fall back to executing just the first
+				if l := s.app.Logger(); l != nil {
+					l.Warn("agent_execute: sequential retry limit reached, executing first tool only",
+						"agent", agentName, "retries", seqRetries)
+				}
+			} else {
+				errMsg := fmt.Sprintf(
+					"[SYSTEM] You sent %d tool calls in one turn, but this agent requires sequential execution. "+
+						"Call ONE tool at a time and wait for its result. "+
+						"Your first intended call was %q — resend it as the only tool call.",
+					len(resp.ToolCalls), resp.ToolCalls[0].Name,
+				)
+				messages = append(messages, provider.Message{
+					Role:      provider.RoleAssistant,
+					Content:   resp.Content,
+					ToolCalls: resp.ToolCalls,
+				})
+				messages = append(messages, provider.Message{
+					Role:    provider.RoleUser,
+					Content: errMsg,
+				})
+				iterCount-- // correction turn; don't count toward max_iterations
+				continue
+			}
 		}
 
+		// In sequential mode (or after retry limit), only process the first tool call
 		toolCallsToProcess := resp.ToolCalls
+		if !s.parallelToolCalls && len(toolCallsToProcess) > 1 {
+			toolCallsToProcess = toolCallsToProcess[:1]
+		}
 
 		// Execute tool calls and append results
 		messages = append(messages, provider.Message{
