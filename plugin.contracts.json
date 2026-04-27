@@ -9,22 +9,6 @@
     },
     {
       "kind": "step",
-      "type": "step.agent_execute",
-      "mode": "strict",
-      "config": "workflow.plugins.agent.v1.AgentExecuteConfig",
-      "input": "workflow.plugins.agent.v1.AgentExecuteInput",
-      "output": "workflow.plugins.agent.v1.AgentExecuteOutput"
-    },
-    {
-      "kind": "step",
-      "type": "step.provider_test",
-      "mode": "strict",
-      "config": "workflow.plugins.agent.v1.ProviderTestConfig",
-      "input": "workflow.plugins.agent.v1.ProviderTestInput",
-      "output": "workflow.plugins.agent.v1.ProviderTestOutput"
-    },
-    {
-      "kind": "step",
       "type": "step.provider_models",
       "mode": "strict",
       "config": "workflow.plugins.agent.v1.ProviderModelsConfig",

@@ -31,8 +31,6 @@ func (p *AgentPlugin) ContractRegistry() *pb.ContractRegistry {
 				ConfigMessage: agentContractsPackage + "ProviderConfig",
 				Mode:          pb.ContractMode_CONTRACT_MODE_STRICT_PROTO,
 			},
-			stepContract("step.agent_execute", "AgentExecuteConfig", "AgentExecuteInput", "AgentExecuteOutput"),
-			stepContract("step.provider_test", "ProviderTestConfig", "ProviderTestInput", "ProviderTestOutput"),
 			stepContract("step.provider_models", "ProviderModelsConfig", "ProviderModelsInput", "ProviderModelsOutput"),
 			stepContract("step.model_pull", "ModelPullConfig", "ModelPullInput", "ModelPullOutput"),
 		},
@@ -72,6 +70,9 @@ func (p *AgentPlugin) CreateTypedModule(typeName, name string, config *anypb.Any
 		if err != nil {
 			return nil, err
 		}
+		if err := normalizeProviderConfigMap(values); err != nil {
+			return nil, err
+		}
 		return p.CreateModule(typeName, name, values)
 	})
 	return factory.CreateTypedModule(typeName, name, config)
@@ -103,18 +104,12 @@ func (p *AgentPlugin) CreateStep(typeName, name string, config map[string]any) (
 
 // TypedStepTypes implements sdk.TypedStepProvider.
 func (p *AgentPlugin) TypedStepTypes() []string {
-	return p.StepTypes()
+	return []string{"step.provider_models", "step.model_pull"}
 }
 
 // CreateTypedStep validates protobuf config and returns a strict typed adapter.
 func (p *AgentPlugin) CreateTypedStep(typeName, name string, config *anypb.Any) (sdk.StepInstance, error) {
 	switch typeName {
-	case "step.agent_execute":
-		factory := sdk.NewTypedStepFactory(typeName, &contracts.AgentExecuteConfig{}, &contracts.AgentExecuteInput{}, typedAgentExecute(name))
-		return factory.CreateTypedStep(typeName, name, config)
-	case "step.provider_test":
-		factory := sdk.NewTypedStepFactory(typeName, &contracts.ProviderTestConfig{}, &contracts.ProviderTestInput{}, typedProviderTest)
-		return factory.CreateTypedStep(typeName, name, config)
 	case "step.provider_models":
 		factory := sdk.NewTypedStepFactory(typeName, &contracts.ProviderModelsConfig{}, &contracts.ProviderModelsInput{}, typedProviderModels)
 		return factory.CreateTypedStep(typeName, name, config)
@@ -193,32 +188,6 @@ func typedProviderModels(ctx context.Context, req sdk.TypedStepRequest[*contract
 	return &sdk.TypedStepResult[*contracts.ProviderModelsOutput]{Output: providerModelsOutputFromMap(result.Output)}, nil
 }
 
-func typedProviderTest(ctx context.Context, req sdk.TypedStepRequest[*contracts.ProviderTestConfig, *contracts.ProviderTestInput]) (*sdk.TypedStepResult[*contracts.ProviderTestOutput], error) {
-	alias := ""
-	if req.Config != nil {
-		alias = req.Config.GetAlias()
-	}
-	if req.Input != nil && req.Input.GetAlias() != "" {
-		alias = req.Input.GetAlias()
-	}
-	if alias == "" {
-		return nil, fmt.Errorf("provider_test step %q: alias is required", "provider_test")
-	}
-	return &sdk.TypedStepResult[*contracts.ProviderTestOutput]{
-		Output: &contracts.ProviderTestOutput{
-			Success:   false,
-			Message:   "provider registry not available",
-			LatencyMs: 0,
-		},
-	}, nil
-}
-
-func typedAgentExecute(name string) sdk.TypedStepHandler[*contracts.AgentExecuteConfig, *contracts.AgentExecuteInput, *contracts.AgentExecuteOutput] {
-	return func(context.Context, sdk.TypedStepRequest[*contracts.AgentExecuteConfig, *contracts.AgentExecuteInput]) (*sdk.TypedStepResult[*contracts.AgentExecuteOutput], error) {
-		return nil, fmt.Errorf("agent_execute step %q: no application context", name)
-	}
-}
-
 func typedModelPull(name string) sdk.TypedStepHandler[*contracts.ModelPullConfig, *contracts.ModelPullInput, *contracts.ModelPullOutput] {
 	return func(ctx context.Context, req sdk.TypedStepRequest[*contracts.ModelPullConfig, *contracts.ModelPullInput]) (*sdk.TypedStepResult[*contracts.ModelPullOutput], error) {
 		cfg, err := protoMessageToMap(req.Config)
@@ -251,6 +220,34 @@ func protoMessageToMap(msg proto.Message) (map[string]any, error) {
 		return nil, fmt.Errorf("decode typed protobuf config: %w", err)
 	}
 	return values, nil
+}
+
+func normalizeProviderConfigMap(values map[string]any) error {
+	for _, stepRaw := range anySlice(values["steps"]) {
+		step, ok := stepRaw.(map[string]any)
+		if !ok {
+			continue
+		}
+		for _, toolCallRaw := range anySlice(step["tool_calls"]) {
+			toolCall, ok := toolCallRaw.(map[string]any)
+			if !ok {
+				continue
+			}
+			if _, ok := toolCall["arguments"]; ok {
+				continue
+			}
+			argsJSON, _ := toolCall["arguments_json"].(string)
+			if argsJSON == "" {
+				continue
+			}
+			args := map[string]any{}
+			if err := json.Unmarshal([]byte(argsJSON), &args); err != nil {
+				return fmt.Errorf("decode provider step tool_call arguments_json: %w", err)
+			}
+			toolCall["arguments"] = args
+		}
+	}
+	return nil
 }
 
 func providerModelsOutputFromMap(values map[string]any) *contracts.ProviderModelsOutput {
