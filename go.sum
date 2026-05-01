@@ -44,7 +44,7 @@ github.com/BurntSushi/toml v1.6.0/go.mod h1:ukJfTF/6rtPPRCnwkur4qwRxa8vTRFBF0uk2
 github.com/DataDog/datadog-go v3.2.0+incompatible/go.mod h1:LButxg5PwREeZtORoXG3tL4fMGNddJ+vMq1mwgfaqoQ=
 github.com/DataDog/datadog-go/v5 v5.8.3 h1:s58CUJ9s8lezjhTNJO/SxkPBv2qZjS3ktpRSqGF5n0s=
 github.com/DataDog/datadog-go/v5 v5.8.3/go.mod h1:K9kcYBlxkcPP8tvvjZZKs/m1edNAUFzBbdpTUKfCsuw=
-github.com/GoCodeAlone/genkit/go v1.6.2-gocodealone.1 h1:3lr0KbCIzg2CLsNhHizb6ZLkCZQsFY/oWx+Qs61e7Zc=
+github.com/GoCodeAlone/genkit/go v1.6.2-gocodealone.1 h1:1h1RSXyJow8O2vyXWKbqKLh9BD4BEV8nAkxsYnydADI=
 github.com/GoCodeAlone/genkit/go v1.6.2-gocodealone.1/go.mod h1:FC5neH/nZJOqCQvMYodIy36cNZ1PWYJa2zkgkagfytg=
 github.com/GoCodeAlone/go-plugin v1.7.0 h1:EwnhqPlXiNmp85S+MXnKKvm3YlfA6O4NzBb4+GSlEVY=
 github.com/GoCodeAlone/go-plugin v1.7.0/go.mod h1:HbGQRZUIa+jbDfjsaZIMJYvrz+LnxL0mJpggfynSTMk=
