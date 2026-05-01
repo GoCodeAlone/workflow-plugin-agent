@@ -4,9 +4,75 @@
   "description": "AI agent primitives for workflow apps",
   "author": "GoCodeAlone",
   "license": "Proprietary",
-  "private": true,
-  "capabilities": {
-    "moduleTypes": ["agent.provider"],
-    "stepTypes": ["step.agent_execute", "step.provider_test", "step.provider_models"]
-  }
+  "moduleTypes": ["agent.provider"],
+  "stepTypes": ["step.agent_execute", "step.provider_test", "step.provider_models", "step.model_pull"],
+  "wiringHooks": ["agent.provider_registry"],
+  "stepSchemas": [
+    {
+      "type": "step.agent_execute",
+      "plugin": "workflow-plugin-agent",
+      "description": "Runs the autonomous agent loop: LLM call → tool execution → repeat until the task is complete or max_iterations is reached.",
+      "configFields": [
+        {"key": "provider_service", "label": "Provider Service", "type": "string", "description": "Name of the AI provider service in the module registry (default: ratchet-ai)"},
+        {"key": "max_iterations", "label": "Max Iterations", "type": "number", "defaultValue": 10, "description": "Maximum number of agent loop iterations before halting"},
+        {"key": "approval_timeout", "label": "Approval Timeout", "type": "duration", "defaultValue": "30m", "description": "How long to wait for human approval before timing out"},
+        {"key": "request_timeout", "label": "Request Timeout", "type": "duration", "defaultValue": "60m", "description": "Maximum duration for a single agent execution"},
+        {"key": "loop_detection", "label": "Loop Detection", "type": "json", "description": "Loop detection tuning: max_consecutive, max_errors, max_alternating, max_no_progress"},
+        {"key": "context", "label": "Context Management", "type": "json", "description": "Context window management options (compaction_threshold: 0.0–1.0)"}
+      ],
+      "outputs": [
+        {"key": "result", "type": "string", "description": "Final text content produced by the agent"},
+        {"key": "status", "type": "string", "description": "Completion status: completed, max_iterations, error"},
+        {"key": "iterations", "type": "number", "description": "Number of agent loop iterations executed"},
+        {"key": "thinking", "type": "string", "description": "Extended thinking output (present when the model supports it)"},
+        {"key": "error", "type": "string", "description": "Error message when status is 'error'"}
+      ],
+      "readKeys": ["system_prompt", "description", "task", "agent_name", "name", "agent_id", "task_id", "id", "project_id", "provider"]
+    },
+    {
+      "type": "step.provider_test",
+      "plugin": "workflow-plugin-agent",
+      "description": "Tests connectivity to a registered AI provider by alias, measuring round-trip latency.",
+      "configFields": [
+        {"key": "alias", "label": "Provider Alias", "type": "string", "description": "Alias of the provider to test (can be a template expression)"}
+      ],
+      "outputs": [
+        {"key": "success", "type": "boolean", "description": "true when the provider responded successfully"},
+        {"key": "message", "type": "string", "description": "Human-readable result or error description"},
+        {"key": "latency_ms", "type": "number", "description": "Round-trip latency in milliseconds"}
+      ],
+      "readKeys": ["alias"]
+    },
+    {
+      "type": "step.provider_models",
+      "plugin": "workflow-plugin-agent",
+      "description": "Lists available models from an AI provider API, accepting provider credentials from the pipeline context.",
+      "configFields": [],
+      "outputs": [
+        {"key": "success", "type": "boolean", "description": "true when model listing succeeded"},
+        {"key": "models", "type": "array", "description": "Array of model objects: {id, name, context_window}"},
+        {"key": "error", "type": "string", "description": "Error description when success is false"}
+      ],
+      "readKeys": ["type", "api_key", "base_url"]
+    },
+    {
+      "type": "step.model_pull",
+      "plugin": "workflow-plugin-agent",
+      "description": "Ensures a local model is available by pulling it from Ollama or downloading from HuggingFace Hub.",
+      "configFields": [
+        {"key": "provider", "label": "Source", "type": "select", "options": ["ollama", "huggingface"], "required": true, "description": "Model source: ollama (local server) or huggingface (Hub download)"},
+        {"key": "model", "label": "Model", "type": "string", "required": true, "description": "Model name (Ollama) or HuggingFace repo (org/repo)"},
+        {"key": "file", "label": "File", "type": "string", "description": "Filename within the HuggingFace repo to download (required for huggingface source)"},
+        {"key": "output_dir", "label": "Output Directory", "type": "filepath", "description": "Local directory to store downloaded files (defaults to ~/.cache/workflow/models)"},
+        {"key": "base_url", "label": "Ollama Base URL", "type": "string", "defaultValue": "http://localhost:11434", "description": "Ollama server base URL (only used for ollama source)"}
+      ],
+      "outputs": [
+        {"key": "status", "type": "string", "description": "Result status: ready (already present), downloaded, or error"},
+        {"key": "model_path", "type": "string", "description": "Local path or name of the model"},
+        {"key": "size_bytes", "type": "number", "description": "File size in bytes (0 for Ollama models)"},
+        {"key": "error", "type": "string", "description": "Error message when status is 'error'"}
+      ],
+      "readKeys": []
+    }
+  ]
 }
