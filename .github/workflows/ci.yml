@@ -14,6 +14,8 @@ env:
 jobs:
   test:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     steps:
       - uses: actions/checkout@v4
 
@@ -33,6 +35,8 @@ jobs:
 
   validate-contracts:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     steps:
       - uses: actions/checkout@v4
 
@@ -48,8 +52,8 @@ jobs:
         run: |
           test -f plugin.json || { echo "ERROR: plugin.json is missing — every Workflow plugin must ship a manifest"; exit 1; }
 
-      - name: Validate strict plugin contracts (wfctl plugin test)
-        run: go run github.com/GoCodeAlone/workflow/cmd/wfctl plugin test .
+      - name: Validate strict plugin contracts
+        run: go run github.com/GoCodeAlone/workflow/cmd/wfctl@v0.20.1 plugin validate --file plugin.json --strict-contracts
 
       - name: Validate contract descriptor coverage (go test)
         run: go test -run 'TestAgentPluginStepSchemas|TestAgentPluginModuleSchemas|TestAgentPluginManifestStepSchemas|TestPluginJSONCanonicalFormat' -v .
