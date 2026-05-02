@@ -4,9 +4,19 @@
   "description": "AI agent primitives for workflow apps",
   "author": "GoCodeAlone",
   "license": "Proprietary",
+  "type": "builtin",
+  "tier": "core",
+  "minEngineVersion": "0.19.0",
   "private": true,
   "capabilities": {
+    "configProvider": false,
     "moduleTypes": ["agent.provider"],
-    "stepTypes": ["step.agent_execute", "step.provider_test", "step.provider_models"]
+    "stepTypes": ["step.provider_models", "step.model_pull"],
+    "triggerTypes": []
+  },
+  "strictContracts": {
+    "enabled": true,
+    "mode": "strict",
+    "registry": "plugin.contracts.json"
   }
 }
