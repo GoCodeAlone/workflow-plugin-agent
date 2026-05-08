@@ -49,7 +49,16 @@ jobs:
           script: |
             const tag = process.env.GITHUB_REF_NAME;
             const { owner, repo } = context.repo;
-            const { data: release } = await github.rest.repos.getReleaseByTag({ owner, repo, tag });
+            let release;
+            try {
+              ({ data: release } = await github.rest.repos.getReleaseByTag({ owner, repo, tag }));
+            } catch (error) {
+              if (error.status === 404) {
+                core.setFailed(`No GitHub release found for ${tag}; ensure GoReleaser created the draft before publishing.`);
+                return;
+              }
+              throw error;
+            }
             if (release.draft) {
               await github.rest.repos.updateRelease({
                 owner,
