@@ -52,3 +52,8 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.REGISTRY_PAT }}
         continue-on-error: true
+      - name: Publish GitHub release
+        if: ${{ success() }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release edit "${{ github.ref_name }}" --draft=false --repo "${{ github.repository }}"
