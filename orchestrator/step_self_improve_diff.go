@@ -3,6 +3,7 @@ package orchestrator
 import (
 	"context"
 	"fmt"
+	"os"
 	"strings"
 
 	"github.com/GoCodeAlone/modular"
@@ -24,6 +25,8 @@ type SelfImproveDiffStep struct {
 	name               string
 	proposedKey        string
 	currentKey         string
+	proposedYAMLFile   string // file path to read proposed YAML from (overrides proposedKey if set)
+	currentYAMLFile    string // file path to read current YAML from (overrides currentKey if set)
 	force              bool
 	includeIAC         bool
 	outputToBlackboard bool
@@ -42,8 +45,27 @@ func (s *SelfImproveDiffStep) Execute(ctx context.Context, pc *module.PipelineCo
 		currentKey = "current_yaml"
 	}
 
-	proposedYAML := extractString(pc.Current, proposedKey, "")
-	currentYAML := extractString(pc.Current, currentKey, "")
+	var proposedYAML string
+	if s.proposedYAMLFile != "" {
+		data, err := os.ReadFile(s.proposedYAMLFile)
+		if err != nil {
+			return nil, fmt.Errorf("self_improve_diff step %q: reading proposed_yaml_file %q: %w", s.name, s.proposedYAMLFile, err)
+		}
+		proposedYAML = string(data)
+	} else {
+		proposedYAML = extractString(pc.Current, proposedKey, "")
+	}
+
+	var currentYAML string
+	if s.currentYAMLFile != "" {
+		data, err := os.ReadFile(s.currentYAMLFile)
+		if err != nil {
+			return nil, fmt.Errorf("self_improve_diff step %q: reading current_yaml_file %q: %w", s.name, s.currentYAMLFile, err)
+		}
+		currentYAML = string(data)
+	} else {
+		currentYAML = extractString(pc.Current, currentKey, "")
+	}
 
 	if proposedYAML == "" {
 		return nil, fmt.Errorf("self_improve_diff step %q: %q is required", s.name, proposedKey)
@@ -162,6 +184,8 @@ func newSelfImproveDiffFactory() plugin.StepFactory {
 	return func(name string, cfg map[string]any, app modular.Application) (any, error) {
 		proposedKey, _ := cfg["proposed_key"].(string)
 		currentKey, _ := cfg["current_key"].(string)
+		proposedYAMLFile, _ := cfg["proposed_yaml_file"].(string)
+		currentYAMLFile, _ := cfg["current_yaml_file"].(string)
 		force, _ := cfg["force"].(bool)
 		includeIAC, _ := cfg["include_iac"].(bool)
 		outputToBlackboard, _ := cfg["output_to_blackboard"].(bool)
@@ -169,6 +193,8 @@ func newSelfImproveDiffFactory() plugin.StepFactory {
 			name:               name,
 			proposedKey:        proposedKey,
 			currentKey:         currentKey,
+			proposedYAMLFile:   proposedYAMLFile,
+			currentYAMLFile:    currentYAMLFile,
 			force:              force,
 			includeIAC:         includeIAC,
 			outputToBlackboard: outputToBlackboard,
