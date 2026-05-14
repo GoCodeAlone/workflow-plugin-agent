@@ -1,0 +1,27 @@
+{
+  "version": "v1",
+  "contracts": [
+    {
+      "kind": "module",
+      "type": "agent.provider",
+      "mode": "strict",
+      "config": "workflow.plugins.agent.v1.ProviderConfig"
+    },
+    {
+      "kind": "step",
+      "type": "step.provider_models",
+      "mode": "strict",
+      "config": "workflow.plugins.agent.v1.ProviderModelsConfig",
+      "input": "workflow.plugins.agent.v1.ProviderModelsInput",
+      "output": "workflow.plugins.agent.v1.ProviderModelsOutput"
+    },
+    {
+      "kind": "step",
+      "type": "step.model_pull",
+      "mode": "strict",
+      "config": "workflow.plugins.agent.v1.ModelPullConfig",
+      "input": "workflow.plugins.agent.v1.ModelPullInput",
+      "output": "workflow.plugins.agent.v1.ModelPullOutput"
+    }
+  ]
+}

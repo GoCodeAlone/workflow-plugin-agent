@@ -1,0 +1,137 @@
+syntax = "proto3";
+
+package workflow.plugins.agent.v1;
+
+option go_package = "github.com/GoCodeAlone/workflow-plugin-agent/internal/contracts;contracts";
+
+message AgentSeed {
+  string id = 1;
+  string name = 2;
+  string role = 3;
+  string system_prompt = 4;
+  string provider = 5;
+  string model = 6;
+  string team_id = 7;
+  bool is_lead = 8;
+}
+
+message ToolCall {
+  string id = 1;
+  string name = 2;
+  string arguments_json = 3;
+}
+
+message ScriptedStep {
+  string content = 1;
+  string error = 2;
+  repeated ToolCall tool_calls = 3;
+}
+
+message ProviderConfig {
+  string provider = 1;
+  string model = 2;
+  string api_key = 3;
+  string base_url = 4;
+  int32 max_tokens = 5;
+  repeated string responses = 6;
+  string test_mode = 7;
+  string scenario_file = 8;
+  bool loop = 9;
+  string timeout = 10;
+  int32 context_window = 11;
+  repeated ScriptedStep steps = 12;
+  repeated AgentSeed agents = 13;
+}
+
+message AgentExecuteConfig {
+  int32 max_iterations = 1;
+  string provider_service = 2;
+  string approval_timeout = 3;
+  string request_timeout = 4;
+  LoopDetectionConfig loop_detection = 5;
+  AgentContextConfig context = 6;
+}
+
+message LoopDetectionConfig {
+  int32 max_consecutive = 1;
+  int32 max_errors = 2;
+  int32 max_alternating = 3;
+  int32 max_no_progress = 4;
+}
+
+message AgentContextConfig {
+  double compaction_threshold = 1;
+}
+
+message AgentExecuteInput {
+  string provider = 1;
+  string system_prompt = 2;
+  string description = 3;
+  string task = 4;
+  string agent_name = 5;
+  string name = 6;
+  string agent_id = 7;
+  string task_id = 8;
+  string id = 9;
+  string project_id = 10;
+}
+
+message AgentExecuteOutput {
+  string result = 1;
+  string status = 2;
+  int32 iterations = 3;
+  string thinking = 4;
+  string error = 100;
+}
+
+message ProviderTestConfig {
+  string alias = 1;
+}
+
+message ProviderTestInput {
+  string alias = 1;
+}
+
+message ProviderTestOutput {
+  bool success = 1;
+  string message = 2;
+  int64 latency_ms = 3;
+}
+
+message ProviderModelsConfig {}
+
+message ProviderModelsInput {
+  string provider_type = 1;
+  string api_key = 2;
+  string base_url = 3;
+}
+
+message ProviderModel {
+  string id = 1;
+  string name = 2;
+  int32 context_window = 3;
+}
+
+message ProviderModelsOutput {
+  bool success = 1;
+  repeated ProviderModel models = 2;
+  string error = 100;
+}
+
+message ModelPullConfig {
+  string provider = 1;
+  string source = 2;
+  string model = 3;
+  string file = 4;
+  string output_dir = 5;
+  string base_url = 6;
+}
+
+message ModelPullInput {}
+
+message ModelPullOutput {
+  string status = 1;
+  string model_path = 2;
+  int64 size_bytes = 3;
+  string error = 100;
+}
