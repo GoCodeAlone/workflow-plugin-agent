@@ -6,7 +6,7 @@
   "license": "Proprietary",
   "type": "builtin",
   "tier": "core",
-  "minEngineVersion": "0.51.7",
+  "minEngineVersion": "0.53.0",
   "private": true,
   "capabilities": {
     "configProvider": false,
