@@ -1,0 +1,16 @@
+# Minimal workflow-plugin-agent example.
+# Configures an Anthropic AI provider module.
+#
+# Prerequisites:
+#   export ANTHROPIC_API_KEY=<your-anthropic-api-key>
+#
+# Usage:
+#   wfctl validate --skip-unknown-types examples/minimal/config.yaml
+
+modules:
+  - name: ai-provider
+    type: agent.provider
+    config:
+      provider: anthropic
+      model: claude-3-5-haiku-20241022
+      api_key: ${ANTHROPIC_API_KEY}
