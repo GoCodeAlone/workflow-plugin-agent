@@ -1,5 +1,7 @@
 # workflow-plugin-agent
 
+> ✅ **Verified** — used in production at **ratchet**. This plugin has been validated end-to-end in a merged main-branch wfctl.yaml of an active GoCodeAlone project.
+
 AI agent primitives for workflow apps. An internal engine plugin providing:
 
 - `agent.provider` module — AI provider abstraction (mock, test, anthropic, openai, copilot)
