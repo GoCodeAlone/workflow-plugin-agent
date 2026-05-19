@@ -1,5 +1,5 @@
 # Minimal workflow-plugin-agent example.
-# Configures an Anthropic AI provider module.
+# Configures an Anthropic AI provider and runs an agent task.
 #
 # Prerequisites:
 #   export ANTHROPIC_API_KEY=<your-anthropic-api-key>
@@ -14,3 +14,16 @@ modules:
       provider: anthropic
       model: claude-3-5-haiku-20241022
       api_key: ${ANTHROPIC_API_KEY}
+
+workflows:
+  run-agent:
+    trigger:
+      type: http
+      config:
+        path: /agent/run
+        method: POST
+    steps:
+      - name: execute
+        type: step.agent_execute
+        config:
+          provider_service: ai-provider
