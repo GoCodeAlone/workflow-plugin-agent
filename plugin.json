@@ -1,6 +1,6 @@
 {
   "name": "workflow-plugin-agent",
-  "version": "0.9.2",
+  "version": "0.0.0",
   "description": "AI agent primitives for workflow apps",
   "author": "GoCodeAlone",
   "license": "Proprietary",
@@ -10,8 +10,13 @@
   "private": true,
   "capabilities": {
     "configProvider": false,
-    "moduleTypes": ["agent.provider"],
-    "stepTypes": ["step.provider_models", "step.model_pull"],
+    "moduleTypes": [
+      "agent.provider"
+    ],
+    "stepTypes": [
+      "step.provider_models",
+      "step.model_pull"
+    ],
     "triggerTypes": []
   },
   "strictContracts": {

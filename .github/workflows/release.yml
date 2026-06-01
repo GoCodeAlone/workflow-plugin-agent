@@ -26,6 +26,16 @@ jobs:
       - name: Configure git for private modules
         run: git config --global url."https://${{ secrets.RELEASES_TOKEN }}@github.com/".insteadOf "https://github.com/"
 
+      - name: Install wfctl v0.63.2
+        run: |
+          mkdir -p "${RUNNER_TEMP}/wfctl-bin"
+          curl -sSfL -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
+            -o "${RUNNER_TEMP}/wfctl-bin/wfctl" \
+            "https://github.com/GoCodeAlone/workflow/releases/download/v0.63.2/wfctl-linux-amd64"
+          chmod +x "${RUNNER_TEMP}/wfctl-bin/wfctl"
+      - name: Validate plugin contract for publish (pre-build)
+        run: |
+          "${{ runner.temp }}/wfctl-bin/wfctl" plugin validate-contract --for-publish --tag "${{ github.ref_name }}" .
       - name: Run GoReleaser
         uses: goreleaser/goreleaser-action@v7
         with:
@@ -34,6 +44,22 @@ jobs:
           args: release --clean
         env:
           GITHUB_TOKEN: ${{ secrets.RELEASES_TOKEN }}
+      # workflow#765: runtime truth-check via plugin verify-capabilities.
+      - name: Verify capabilities (runtime truth-check)
+        run: |
+          RUNNER_ARCH=$(uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/')
+          BIN=$(jq -r --arg arch "$RUNNER_ARCH" \
+            '[.[] | select(.type=="Binary" and .goos=="linux" and .goarch==$arch and (.name|startswith("workflow-plugin-agent")))] | .[0].path // ""' \
+            dist/artifacts.json)
+          if [ -z "$BIN" ] || [ "$BIN" = "null" ]; then
+            echo "::warning::No matching linux/$RUNNER_ARCH binary in dist/artifacts.json; skipping verify-capabilities"
+            jq '.[] | {name, type, goos, goarch, path}' dist/artifacts.json
+            exit 0
+          fi
+          "${{ runner.temp }}/wfctl-bin/wfctl" plugin verify-capabilities --binary "$BIN" .
+      - name: Verify shipped plugin.json carries tag (post-build)
+        run: |
+          "${{ runner.temp }}/wfctl-bin/wfctl" plugin validate-contract --for-publish --tag "${{ github.ref_name }}" --release-dir . .
 
   publish-release:
     if: startsWith(github.ref, 'refs/tags/v')
