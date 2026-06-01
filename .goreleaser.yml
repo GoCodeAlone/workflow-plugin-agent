@@ -1,7 +1,33 @@
 version: 2
 
+before:
+  hooks:
+    - go mod tidy
+    - "sed -i.bak 's/\"version\": \".*\"/\"version\": \"{{ .Version }}\"/' plugin.json && rm -f plugin.json.bak"
+
 builds:
-  - skip: true
+  - id: workflow-plugin-agent
+    main: ./cmd/workflow-plugin-agent
+    binary: workflow-plugin-agent
+    env:
+      - CGO_ENABLED=0
+      - GOPRIVATE=github.com/GoCodeAlone/*
+    goos:
+      - linux
+      - darwin
+    goarch:
+      - amd64
+      - arm64
+    ldflags:
+      - -s -w -X github.com/GoCodeAlone/workflow-plugin-agent.Version={{.Version}}
+
+archives:
+  - formats: [tar.gz]
+    name_template: "{{ .ProjectName }}-{{ .Os }}-{{ .Arch }}"
+    files:
+      - plugin.json
+      - plugin.contracts.json
+      - LICENSE
 
 changelog:
   sort: asc

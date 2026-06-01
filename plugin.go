@@ -10,6 +10,7 @@ package agent
 import (
 	"github.com/GoCodeAlone/workflow/capability"
 	"github.com/GoCodeAlone/workflow/plugin"
+	sdk "github.com/GoCodeAlone/workflow/plugin/external/sdk"
 	"github.com/GoCodeAlone/workflow/schema"
 )
 
@@ -57,9 +58,9 @@ func agentStepSchemas() []*schema.StepSchema {
 			ReadKeys: []string{"alias"},
 		},
 		{
-			Type:        "step.provider_models",
-			Plugin:      "workflow-plugin-agent",
-			Description: "Lists available models from an AI provider API, accepting provider credentials from the pipeline context.",
+			Type:         "step.provider_models",
+			Plugin:       "workflow-plugin-agent",
+			Description:  "Lists available models from an AI provider API, accepting provider credentials from the pipeline context.",
 			ConfigFields: []schema.ConfigFieldDef{},
 			Outputs: []schema.StepOutputDef{
 				{Key: "success", Type: "boolean", Description: "true when model listing succeeded"},
@@ -101,12 +102,12 @@ func New() *AgentPlugin {
 		BaseEnginePlugin: plugin.BaseEnginePlugin{
 			BaseNativePlugin: plugin.BaseNativePlugin{
 				PluginName:        "agent",
-				PluginVersion:     "0.1.0",
+				PluginVersion:     "0.0.0",
 				PluginDescription: "AI agent primitives for workflow apps",
 			},
 			Manifest: plugin.PluginManifest{
 				Name:        "workflow-plugin-agent",
-				Version:     "0.1.0",
+				Version:     "0.0.0",
 				Author:      "GoCodeAlone",
 				Description: "AI agent primitives for workflow apps",
 				ModuleTypes: []string{"agent.provider"},
@@ -115,6 +116,16 @@ func New() *AgentPlugin {
 				StepSchemas: agentStepSchemas(),
 			},
 		},
+	}
+}
+
+// Manifest implements sdk.PluginProvider for external plugin hosting.
+func (p *AgentPlugin) Manifest() sdk.PluginManifest {
+	return sdk.PluginManifest{
+		Name:        "workflow-plugin-agent",
+		Version:     "0.0.0",
+		Author:      "GoCodeAlone",
+		Description: "AI agent primitives for workflow apps",
 	}
 }
 
