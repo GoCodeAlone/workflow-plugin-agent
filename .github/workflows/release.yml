@@ -34,7 +34,8 @@ jobs:
             "https://github.com/GoCodeAlone/workflow/releases/download/v0.63.2/wfctl-linux-amd64"
           chmod +x "${RUNNER_TEMP}/wfctl-bin/wfctl"
       - name: Validate plugin contract for publish (pre-build)
-        run: "${{ runner.temp }}/wfctl-bin/wfctl plugin validate-contract --for-publish --tag "${{ github.ref_name }}" ."
+        run: |
+          "${{ runner.temp }}/wfctl-bin/wfctl" plugin validate-contract --for-publish --tag "${{ github.ref_name }}" .
       - name: Run GoReleaser
         uses: goreleaser/goreleaser-action@v7
         with:
