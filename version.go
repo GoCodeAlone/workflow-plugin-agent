@@ -1,4 +1,4 @@
 package agent
 
-// Version is injected by GoReleaser for release builds.
-var Version = "dev"
+// Version is the source-tree sentinel and is injected by GoReleaser for release builds.
+var Version = "0.0.0"

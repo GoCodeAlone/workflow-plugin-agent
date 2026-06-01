@@ -102,12 +102,12 @@ func New() *AgentPlugin {
 		BaseEnginePlugin: plugin.BaseEnginePlugin{
 			BaseNativePlugin: plugin.BaseNativePlugin{
 				PluginName:        "agent",
-				PluginVersion:     "0.0.0",
+				PluginVersion:     Version,
 				PluginDescription: "AI agent primitives for workflow apps",
 			},
 			Manifest: plugin.PluginManifest{
 				Name:        "workflow-plugin-agent",
-				Version:     "0.0.0",
+				Version:     Version,
 				Author:      "GoCodeAlone",
 				Description: "AI agent primitives for workflow apps",
 				ModuleTypes: []string{"agent.provider"},
@@ -123,7 +123,7 @@ func New() *AgentPlugin {
 func (p *AgentPlugin) Manifest() sdk.PluginManifest {
 	return sdk.PluginManifest{
 		Name:        "workflow-plugin-agent",
-		Version:     "0.0.0",
+		Version:     Version,
 		Author:      "GoCodeAlone",
 		Description: "AI agent primitives for workflow apps",
 	}
