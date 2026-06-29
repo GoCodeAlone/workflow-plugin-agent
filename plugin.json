@@ -4,16 +4,52 @@
   "description": "AI agent primitives for workflow apps",
   "author": "GoCodeAlone",
   "license": "Proprietary",
-  "type": "builtin",
+  "type": "external",
   "tier": "core",
   "minEngineVersion": "0.53.0",
   "private": true,
+  "homepage": "https://github.com/GoCodeAlone/workflow-plugin-agent",
+  "repository": "https://github.com/GoCodeAlone/workflow-plugin-agent",
+  "downloads": [
+    {
+      "os": "linux",
+      "arch": "amd64",
+      "url": "https://github.com/GoCodeAlone/workflow-plugin-agent/releases/download/v0.0.0/workflow-plugin-agent_0.0.0_linux_amd64.tar.gz"
+    },
+    {
+      "os": "linux",
+      "arch": "arm64",
+      "url": "https://github.com/GoCodeAlone/workflow-plugin-agent/releases/download/v0.0.0/workflow-plugin-agent_0.0.0_linux_arm64.tar.gz"
+    },
+    {
+      "os": "darwin",
+      "arch": "amd64",
+      "url": "https://github.com/GoCodeAlone/workflow-plugin-agent/releases/download/v0.0.0/workflow-plugin-agent_0.0.0_darwin_amd64.tar.gz"
+    },
+    {
+      "os": "darwin",
+      "arch": "arm64",
+      "url": "https://github.com/GoCodeAlone/workflow-plugin-agent/releases/download/v0.0.0/workflow-plugin-agent_0.0.0_darwin_arm64.tar.gz"
+    },
+    {
+      "os": "windows",
+      "arch": "amd64",
+      "url": "https://github.com/GoCodeAlone/workflow-plugin-agent/releases/download/v0.0.0/workflow-plugin-agent_0.0.0_windows_amd64.tar.gz"
+    },
+    {
+      "os": "windows",
+      "arch": "arm64",
+      "url": "https://github.com/GoCodeAlone/workflow-plugin-agent/releases/download/v0.0.0/workflow-plugin-agent_0.0.0_windows_arm64.tar.gz"
+    }
+  ],
   "capabilities": {
     "configProvider": false,
     "moduleTypes": [
       "agent.provider"
     ],
     "stepTypes": [
+      "step.agent_execute",
+      "step.provider_test",
       "step.provider_models",
       "step.model_pull"
     ],

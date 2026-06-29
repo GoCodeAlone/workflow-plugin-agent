@@ -170,11 +170,16 @@ func TestPluginJSONDeclaresStrictContractMetadata(t *testing.T) {
 	if manifest.StrictContracts.Registry != "plugin.contracts.json" {
 		t.Fatalf("strictContracts.registry = %q, want plugin.contracts.json", manifest.StrictContracts.Registry)
 	}
-	for _, stepType := range manifest.Capabilities.StepTypes {
-		switch stepType {
-		case "step.agent_execute", "step.provider_test":
-			t.Fatalf("plugin.json advertises legacy-only step %q while strict contracts are enabled", stepType)
-		}
+	// plugin.json capabilities.stepTypes lists ALL runtime steps (including the
+	// legacy-execution step.agent_execute / step.provider_test) because the
+	// engine treats capabilities as the complete capability advertisement.
+	// Strict-contract coverage is a separate concern: only
+	// step.provider_models / step.model_pull carry ContractRegistry
+	// descriptors (asserted by TestAppBoundStepsAreNotAdvertisedAsStrict).
+	// The drift gate that plugin.json stepTypes == runtime StepTypes() lives
+	// in provider_manifest_test.go (TestPluginJSONStepTypesMatchRuntimeTruth).
+	if len(manifest.Capabilities.StepTypes) == 0 {
+		t.Fatal("plugin.json capabilities.stepTypes is empty; expected runtime-truth advertisement")
 	}
 }
 

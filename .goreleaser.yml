@@ -1,9 +1,12 @@
 version: 2
+project_name: workflow-plugin-agent
 
 before:
   hooks:
     - go mod tidy
-    - "sed -i.bak 's/\"version\": \".*\"/\"version\": \"{{ .Version }}\"/' plugin.json && rm -f plugin.json.bak"
+    # Rewrite plugin.json: bump version sentinel + refresh download URLs to the
+    # release being cut. Mirrors workflow-plugin-infra/.goreleaser.yml before-hook.
+    - "sed -i.bak -e 's/\"version\": \".*\"/\"version\": \"{{ .Version }}\"/' -e 's#/releases/download/v[^/]*/#/releases/download/v{{ .Version }}/#g' -e 's/workflow-plugin-agent_[0-9][0-9A-Za-z.~-]*/workflow-plugin-agent_{{ .Version }}/g' plugin.json && rm -f plugin.json.bak"
 
 builds:
   - id: workflow-plugin-agent
@@ -12,22 +15,28 @@ builds:
     env:
       - CGO_ENABLED=0
       - GOPRIVATE=github.com/GoCodeAlone/*
+    ldflags:
+      - "-s -w -X github.com/GoCodeAlone/workflow-plugin-agent.Version={{ .Version }}"
     goos:
       - linux
       - darwin
+      - windows
     goarch:
       - amd64
       - arm64
-    ldflags:
-      - -s -w -X github.com/GoCodeAlone/workflow-plugin-agent.Version={{.Version}}
 
 archives:
-  - formats: [tar.gz]
-    name_template: "{{ .ProjectName }}-{{ .Os }}-{{ .Arch }}"
+  - id: archive
+    formats:
+      - tar.gz
+    name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
     files:
       - plugin.json
       - plugin.contracts.json
       - LICENSE
+
+checksum:
+  name_template: "checksums.txt"
 
 changelog:
   sort: asc
@@ -39,3 +48,6 @@ changelog:
 
 release:
   draft: true
+  github:
+    owner: GoCodeAlone
+    name: workflow-plugin-agent

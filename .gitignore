@@ -1,2 +1,4 @@
 .worktrees/
 data/
+dist/
+plugin.json.bak
