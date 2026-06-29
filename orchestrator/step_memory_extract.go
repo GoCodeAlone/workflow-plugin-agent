@@ -2,7 +2,6 @@ package orchestrator
 
 import (
 	"context"
-	"database/sql"
 	"fmt"
 	"strings"
 
@@ -49,26 +48,21 @@ func (s *MemoryExtractStep) Execute(ctx context.Context, pc *module.PipelineCont
 		return &module.StepResult{Output: map[string]any{"extracted": false, "reason": "no agent_id"}}, nil
 	}
 
-	// Look up memory store
-	svc, ok := s.app.SvcRegistry()["ratchet-memory-store"]
-	if !ok {
+	// Resolve services via the orchestrator service bundle. memory_extract is
+	// REQUIRED-STATEFUL on both the MemoryStoreService (ExtractAndSave) and the
+	// DB (it must read the transcripts table). Either being absent yields a
+	// graceful extracted=false outcome — matching the prior keyed-lookup
+	// behavior — but the cause strings are preserved for diagnostics.
+	svcs := resolveServices(s.app)
+	if IsNull(svcs.Memory) {
 		return &module.StepResult{Output: map[string]any{"extracted": false, "reason": "memory store not available"}}, nil
 	}
-	ms, ok := svc.(*MemoryStore)
-	if !ok {
-		return &module.StepResult{Output: map[string]any{"extracted": false, "reason": "memory store type mismatch"}}, nil
-	}
+	ms := svcs.Memory
 
-	// Get transcripts for this task
-	var db *sql.DB
-	if dbSvc, ok := s.app.SvcRegistry()["ratchet-db"]; ok {
-		if dbp, ok := dbSvc.(module.DBProvider); ok {
-			db = dbp.DB()
-		}
-	}
-	if db == nil {
+	if svcs.DB == nil {
 		return &module.StepResult{Output: map[string]any{"extracted": false, "reason": "no database"}}, nil
 	}
+	db := svcs.DB.DB()
 
 	// Query recent transcripts for the agent+task
 	query := `SELECT role, content FROM transcripts WHERE agent_id = ? AND task_id = ? ORDER BY created_at ASC`

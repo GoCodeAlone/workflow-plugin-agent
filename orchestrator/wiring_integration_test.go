@@ -240,11 +240,12 @@ func TestResolveServices_DBPresent(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 // TestResolveServices_RepresentativeStepEndToEnd proves the wiring contract
-// resolveServices encodes matches what the (still-unrefactored) steps consume.
-// BlackboardPostStep resolves *Blackboard via SvcRegistry directly (the old
-// cast path); resolveServices resolves the same concrete via its interface.
-// Both paths must agree. When the service is injected the step succeeds; when
-// absent it returns a clear error.
+// resolveServices encodes matches what the refactored (R) steps consume.
+// BlackboardPostStep resolves its dependency via resolveServices(app).Blackboard
+// (the interface); resolveServices returns the same concrete *Blackboard under
+// the BlackboardService interface. Both paths must agree. When the service is
+// injected the step succeeds; when absent it returns a clear
+// ErrServiceUnavailable-wrapped error.
 func TestResolveServices_RepresentativeStepEndToEnd(t *testing.T) {
 	app := newMockApp()
 	db := injectAll(t, app)
@@ -256,7 +257,7 @@ func TestResolveServices_RepresentativeStepEndToEnd(t *testing.T) {
 		t.Fatal("precondition: Blackboard is Null after injection")
 	}
 
-	// 2. Construct and execute the representative step (uses the old cast path).
+	// 2. Construct and execute the representative step (uses resolveServices).
 	step := &BlackboardPostStep{
 		name:         "bb-post-test",
 		phase:        "design",
@@ -294,11 +295,11 @@ func TestResolveServices_RepresentativeStepEndToEnd(t *testing.T) {
 }
 
 // TestResolveServices_RepresentativeStepAbsentSurfacesError proves that when
-// the required-stateful service is absent, the step (still using the old cast
-// path) returns a clear error — and resolveServices simultaneously reports the
-// service as Null. This is the contract Tasks 2-3 will rely on: a step can
-// either nil-check the concrete cast (current) or check IsNull(iface) (future)
-// to produce the same outcome.
+// the required-stateful service is absent, the step (now refactored to
+// resolveServices + IsNull) returns a clear ErrServiceUnavailable-wrapped
+// error — and resolveServices simultaneously reports the service as Null. This
+// is the contract Tasks 2-3 rely on: a refactored step checks IsNull(iface) and
+// returns ErrServiceUnavailable, which callers can match via errors.Is.
 func TestResolveServices_RepresentativeStepAbsentSurfacesError(t *testing.T) {
 	app := newMockApp() // nothing injected
 
@@ -315,11 +316,138 @@ func TestResolveServices_RepresentativeStepAbsentSurfacesError(t *testing.T) {
 	if err == nil {
 		t.Fatal("BlackboardPostStep.Execute err = nil, want error (service absent)")
 	}
+	// Post-refactor: the step wraps ErrServiceUnavailable so callers can match
+	// it via errors.Is rather than substring-matching a bespoke message.
 	if !errors.Is(err, ErrServiceUnavailable) {
-		// The current step returns a bespoke error (not yet ErrServiceUnavailable);
-		// Tasks 2-3 will normalize it to ErrServiceUnavailable. For now we only
-		// require that SOME error surfaces.
-		t.Logf("step error (pre-refactor, bespoke): %v", err)
+		t.Errorf("BlackboardPostStep.Execute err = %v, want errors.Is ErrServiceUnavailable", err)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Refactored single-dep (R) steps end-to-end via resolveServices (P2-T2)
+// ---------------------------------------------------------------------------
+
+// TestResolveServices_RefactoredBlackboardRoundTrip proves the P2-T2 refactor
+// works through the real in-process path: BlackboardPostStep writes via
+// resolveServices(app).Blackboard (the BlackboardService interface) and
+// BlackboardReadStep reads it back through the SAME interface — no concrete
+// *Blackboard cast in either step. This is the pattern proof that Tasks 2-3
+// generalize: a refactored step's interface call is behaviorally identical to
+// the concrete call it replaced.
+func TestResolveServices_RefactoredBlackboardRoundTrip(t *testing.T) {
+	app := newMockApp()
+	db := injectAll(t, app)
+	t.Cleanup(func() { _ = db.Close() })
+
+	// resolveServices sees the injected blackboard as the real *Blackboard.
+	b := resolveServices(app)
+	if IsNull(b.Blackboard) {
+		t.Fatal("precondition: Blackboard is Null after injection")
+	}
+
+	// 1. Post via the refactored step (resolveServices path).
+	postStep := &BlackboardPostStep{
+		name:         "bb-post-iface",
+		phase:        "test",
+		artifactType: "roundtrip",
+		agentID:      "agent-rt",
+		app:          app,
+	}
+	pc := &module.PipelineContext{
+		Current: map[string]any{"content": map[string]any{"payload": "hello"}},
+	}
+	res, err := postStep.Execute(context.Background(), pc)
+	if err != nil {
+		t.Fatalf("BlackboardPostStep.Execute err = %v, want nil (service injected)", err)
+	}
+	if res.Output["success"] != true {
+		t.Fatalf("post output = %#v, want success=true", res.Output)
+	}
+
+	// 2. Read it back via the refactored read step (same resolveServices path).
+	readStep := &BlackboardReadStep{
+		name:         "bb-read-iface",
+		phase:        "test",
+		artifactType: "roundtrip",
+		app:          app,
+	}
+	readRes, err := readStep.Execute(context.Background(), &module.PipelineContext{Current: map[string]any{}})
+	if err != nil {
+		t.Fatalf("BlackboardReadStep.Execute err = %v, want nil", err)
+	}
+	if count, _ := readRes.Output["count"].(int); count != 1 {
+		t.Fatalf("read count = %d, want 1", count)
+	}
+	arts, _ := readRes.Output["artifacts"].([]map[string]any)
+	if len(arts) != 1 || arts[0]["content"] == nil {
+		t.Fatalf("read artifacts = %#v, want 1 with content", arts)
+	}
+
+	// 3. The interface-resolved Blackboard and the step see the same state.
+	direct, err := b.Blackboard.Read(context.Background(), "test", "roundtrip")
+	if err != nil {
+		t.Fatalf("BlackboardService.Read err = %v", err)
+	}
+	if len(direct) != 1 || direct[0].Content["payload"] != "hello" {
+		t.Errorf("interface Read = %+v, want payload=hello", direct)
+	}
+}
+
+// TestResolveServices_RefactoredApprovalRequired proves a SECOND refactored
+// single-dep (R) step — ApprovalResolveStep (REQUIRED-STATEFUL on
+// ApprovalService) — surfaces ErrServiceUnavailable when absent and resolves
+// the real ApprovalManager when injected. This guards that the required-stateful
+// classification is applied consistently, not just to the blackboard step.
+func TestResolveServices_RefactoredApprovalRequired(t *testing.T) {
+	// Absent → typed error.
+	app := newMockApp()
+	if !IsNull(resolveServices(app).Approval) {
+		t.Fatal("precondition: Approval must be Null on empty app")
+	}
+	absentStep := &ApprovalResolveStep{name: "approval-absent", action: "approve", app: app}
+	_, err := absentStep.Execute(context.Background(), &module.PipelineContext{
+		Current: map[string]any{"id": "ap-1"},
+	})
+	if !errors.Is(err, ErrServiceUnavailable) {
+		t.Errorf("absent ApprovalResolveStep err = %v, want errors.Is ErrServiceUnavailable", err)
+	}
+
+	// Injected → resolves real ApprovalManager via the interface.
+	app2 := newMockApp()
+	db := injectAll(t, app2)
+	t.Cleanup(func() { _ = db.Close() })
+	// injectAll wires ApprovalManager but does not run a full schema migration;
+	// create the approvals table explicitly (mirrors setupApprovalDB in
+	// approval_test.go; the DDL constant lives in production db.go).
+	if _, err := db.Exec(createApprovalsTable); err != nil {
+		t.Fatalf("create approvals table: %v", err)
+	}
+	if IsNull(resolveServices(app2).Approval) {
+		t.Fatal("precondition: Approval must be real after injection")
+	}
+
+	am := resolveServices(app2).Approval
+	approvalID, err := am.CreateApproval(context.Background(), "agent-x", "task-1", "deploy", "risk", "details")
+	if err != nil {
+		t.Fatalf("CreateApproval: %v", err)
+	}
+
+	resolveStep := &ApprovalResolveStep{name: "approval-resolve", action: "approve", app: app2}
+	res, err := resolveStep.Execute(context.Background(), &module.PipelineContext{
+		Current: map[string]any{"id": approvalID},
+	})
+	if err != nil {
+		t.Fatalf("ApprovalResolveStep.Execute err = %v, want nil (service injected)", err)
+	}
+	if res.Output["success"] != true {
+		t.Errorf("resolve output = %#v, want success=true", res.Output)
+	}
+	got, err := am.Get(context.Background(), approvalID)
+	if err != nil {
+		t.Fatalf("ApprovalService.Get: %v", err)
+	}
+	if got.Status != ApprovalApproved {
+		t.Errorf("approval status = %s, want %s", got.Status, ApprovalApproved)
 	}
 }
 

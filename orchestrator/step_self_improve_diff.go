@@ -109,12 +109,14 @@ func (s *SelfImproveDiffStep) Execute(ctx context.Context, pc *module.PipelineCo
 }
 
 // postToBlackboard posts the diff as a config_diff artifact to the blackboard.
+// The Blackboard is TRULY-OPTIONAL here: when resolveServices hands back a
+// NullBlackboard, the post is skipped (this method returns a benign error that
+// Execute records as a non-fatal blackboard_warning, leaving the diff output
+// intact). When the service IS present it posts via the BlackboardService
+// interface.
 func (s *SelfImproveDiffStep) postToBlackboard(ctx context.Context, pc *module.PipelineContext, diff []string) error {
-	var bb *Blackboard
-	if svc, ok := s.app.SvcRegistry()["ratchet-blackboard"]; ok {
-		bb, _ = svc.(*Blackboard)
-	}
-	if bb == nil {
+	bb := resolveServices(s.app).Blackboard
+	if IsNull(bb) {
 		return fmt.Errorf("blackboard not available")
 	}
 
