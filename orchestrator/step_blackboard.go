@@ -23,9 +23,12 @@ type BlackboardPostStep struct {
 func (s *BlackboardPostStep) Name() string { return s.name }
 
 func (s *BlackboardPostStep) Execute(ctx context.Context, pc *module.PipelineContext) (*module.StepResult, error) {
-	bb := s.blackboard()
-	if bb == nil {
-		return nil, fmt.Errorf("blackboard_post step %q: blackboard not available", s.name)
+	// BlackboardPostStep is REQUIRED-STATEFUL: it cannot post without the
+	// service. resolveServices hands back a NullBlackboard when the service is
+	// absent; IsNull distinguishes that from a real BlackboardService.
+	bb := resolveServices(s.app).Blackboard
+	if IsNull(bb) {
+		return nil, fmt.Errorf("blackboard_post step %q: %w", s.name, ErrServiceUnavailable)
 	}
 
 	phase := s.phase
@@ -80,16 +83,6 @@ func (s *BlackboardPostStep) Execute(ctx context.Context, pc *module.PipelineCon
 	}, nil
 }
 
-// blackboard returns the Blackboard from the service registry, or nil.
-func (s *BlackboardPostStep) blackboard() *Blackboard {
-	if svc, ok := s.app.SvcRegistry()["ratchet-blackboard"]; ok {
-		if bb, ok := svc.(*Blackboard); ok {
-			return bb
-		}
-	}
-	return nil
-}
-
 // newBlackboardPostFactory returns a plugin.StepFactory for "step.blackboard_post".
 func newBlackboardPostFactory() plugin.StepFactory {
 	return func(name string, cfg map[string]any, app modular.Application) (any, error) {
@@ -119,9 +112,10 @@ type BlackboardReadStep struct {
 func (s *BlackboardReadStep) Name() string { return s.name }
 
 func (s *BlackboardReadStep) Execute(ctx context.Context, pc *module.PipelineContext) (*module.StepResult, error) {
-	bb := s.blackboard()
-	if bb == nil {
-		return nil, fmt.Errorf("blackboard_read step %q: blackboard not available", s.name)
+	// BlackboardReadStep is REQUIRED-STATEFUL: reading requires the service.
+	bb := resolveServices(s.app).Blackboard
+	if IsNull(bb) {
+		return nil, fmt.Errorf("blackboard_read step %q: %w", s.name, ErrServiceUnavailable)
 	}
 
 	phase := s.phase
@@ -168,16 +162,6 @@ func (s *BlackboardReadStep) Execute(ctx context.Context, pc *module.PipelineCon
 			"count":     len(out),
 		},
 	}, nil
-}
-
-// blackboard returns the Blackboard from the service registry, or nil.
-func (s *BlackboardReadStep) blackboard() *Blackboard {
-	if svc, ok := s.app.SvcRegistry()["ratchet-blackboard"]; ok {
-		if bb, ok := svc.(*Blackboard); ok {
-			return bb
-		}
-	}
-	return nil
 }
 
 // artifactToMap converts an Artifact to a plain map for step output.

@@ -20,13 +20,12 @@ type ApprovalResolveStep struct {
 func (s *ApprovalResolveStep) Name() string { return s.name }
 
 func (s *ApprovalResolveStep) Execute(ctx context.Context, pc *module.PipelineContext) (*module.StepResult, error) {
-	// Lazy-lookup ApprovalManager
-	var am *ApprovalManager
-	if svc, ok := s.app.SvcRegistry()["ratchet-approval-manager"]; ok {
-		am, _ = svc.(*ApprovalManager)
-	}
-	if am == nil {
-		return nil, fmt.Errorf("approval_resolve step %q: approval manager not available", s.name)
+	// ApprovalResolveStep is REQUIRED-STATEFUL: Approve/Reject cannot proceed
+	// without the manager. resolveServices hands back a NullApproval when the
+	// service is absent; IsNull distinguishes that from a real ApprovalService.
+	am := resolveServices(s.app).Approval
+	if IsNull(am) {
+		return nil, fmt.Errorf("approval_resolve step %q: %w", s.name, ErrServiceUnavailable)
 	}
 
 	// Resolve approval ID from path params or current data
