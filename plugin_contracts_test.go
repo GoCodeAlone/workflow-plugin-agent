@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -36,6 +37,18 @@ func TestContractRegistryDeclaresStrictContracts(t *testing.T) {
 		"module:agent.provider": {
 			kind:   pb.ContractKind_CONTRACT_KIND_MODULE,
 			config: "workflow.plugins.agent.v1.ProviderConfig",
+		},
+		"step:step.agent_execute": {
+			kind:   pb.ContractKind_CONTRACT_KIND_STEP,
+			config: "workflow.plugins.agent.v1.AgentExecuteConfig",
+			input:  "workflow.plugins.agent.v1.AgentExecuteInput",
+			output: "workflow.plugins.agent.v1.AgentExecuteOutput",
+		},
+		"step:step.provider_test": {
+			kind:   pb.ContractKind_CONTRACT_KIND_STEP,
+			config: "workflow.plugins.agent.v1.ProviderTestConfig",
+			input:  "workflow.plugins.agent.v1.ProviderTestInput",
+			output: "workflow.plugins.agent.v1.ProviderTestOutput",
 		},
 		"step:step.provider_models": {
 			kind:   pb.ContractKind_CONTRACT_KIND_STEP,
@@ -79,12 +92,33 @@ func TestContractRegistryDeclaresStrictContracts(t *testing.T) {
 	}
 }
 
-func TestAppBoundStepsAreNotAdvertisedAsStrict(t *testing.T) {
+// TestAppBoundStepsAdvertisedStrictButLegacyExecuted documents the hybrid
+// contract for step.agent_execute + step.provider_test: they carry strict
+// contract DESCRIPTORS (so consumers know their config/input/output shape and
+// the strict-contracts coverage gate passes) but remain on the legacy map
+// execution path because their implementations lazy-lookup services from
+// modular.Application, which the typed gRPC handler signature cannot access.
+// CreateTypedStep therefore declines them (ErrTypedContractNotHandled) and the
+// engine falls back to the legacy StepProvider path.
+func TestAppBoundStepsAdvertisedStrictButLegacyExecuted(t *testing.T) {
 	registry := New().ContractRegistry()
+	descriptors := map[string]*pb.ContractDescriptor{}
 	for _, descriptor := range registry.Contracts {
-		switch descriptor.StepType {
-		case "step.agent_execute", "step.provider_test":
-			t.Fatalf("%s requires application services and must not be advertised as strict", descriptor.StepType)
+		if descriptor.Kind == pb.ContractKind_CONTRACT_KIND_STEP {
+			descriptors[descriptor.StepType] = descriptor
+		}
+	}
+
+	for _, stepType := range []string{"step.agent_execute", "step.provider_test"} {
+		desc, ok := descriptors[stepType]
+		if !ok {
+			t.Fatalf("%s missing strict contract descriptor", stepType)
+		}
+		if desc.Mode != pb.ContractMode_CONTRACT_MODE_STRICT_PROTO {
+			t.Fatalf("%s mode = %s, want strict proto", stepType, desc.Mode)
+		}
+		if desc.ConfigMessage == "" || desc.InputMessage == "" || desc.OutputMessage == "" {
+			t.Fatalf("%s descriptor must carry config/input/output messages", stepType)
 		}
 	}
 
@@ -97,8 +131,24 @@ func TestAppBoundStepsAreNotAdvertisedAsStrict(t *testing.T) {
 		if err != nil {
 			t.Fatalf("pack config: %v", err)
 		}
-		if _, err := typedProvider.CreateTypedStep(stepType, "app-bound", config); err == nil {
-			t.Fatalf("CreateTypedStep(%q) succeeded; app-bound step must use legacy execution", stepType)
+		_, err = typedProvider.CreateTypedStep(stepType, "app-bound", config)
+		if err == nil {
+			t.Fatalf("CreateTypedStep(%q) succeeded; app-bound step must decline typed execution so the engine uses the legacy path", stepType)
+		}
+		if !errors.Is(err, sdk.ErrTypedContractNotHandled) {
+			t.Fatalf("CreateTypedStep(%q) error = %v, want ErrTypedContractNotHandled", stepType, err)
+		}
+	}
+
+	// TypedStepTypes advertises only the two fully-typed steps; the app-bound
+	// pair is intentionally absent because they cannot execute via the typed
+	// handler signature. StepTypes() (legacy) still lists all four.
+	typedStepTypes := typedProvider.TypedStepTypes()
+	for _, stepType := range []string{"step.agent_execute", "step.provider_test"} {
+		for _, got := range typedStepTypes {
+			if got == stepType {
+				t.Fatalf("TypedStepTypes must not list app-bound %s (legacy-execution only)", stepType)
+			}
 		}
 	}
 }
@@ -170,12 +220,11 @@ func TestPluginJSONDeclaresStrictContractMetadata(t *testing.T) {
 	if manifest.StrictContracts.Registry != "plugin.contracts.json" {
 		t.Fatalf("strictContracts.registry = %q, want plugin.contracts.json", manifest.StrictContracts.Registry)
 	}
-	// plugin.json capabilities.stepTypes lists ALL runtime steps (including the
-	// legacy-execution step.agent_execute / step.provider_test) because the
-	// engine treats capabilities as the complete capability advertisement.
-	// Strict-contract coverage is a separate concern: only
-	// step.provider_models / step.model_pull carry ContractRegistry
-	// descriptors (asserted by TestAppBoundStepsAreNotAdvertisedAsStrict).
+	// plugin.json capabilities.stepTypes lists ALL runtime steps. All four
+	// carry strict contract descriptors in plugin.contracts.json (asserted by
+	// TestPluginContractsManifestMatchesRegistry); step.agent_execute and
+	// step.provider_test remain legacy-execution despite having descriptors
+	// (asserted by TestAppBoundStepsAdvertisedStrictButLegacyExecuted).
 	// The drift gate that plugin.json stepTypes == runtime StepTypes() lives
 	// in provider_manifest_test.go (TestPluginJSONStepTypesMatchRuntimeTruth).
 	if len(manifest.Capabilities.StepTypes) == 0 {

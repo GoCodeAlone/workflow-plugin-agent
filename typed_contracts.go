@@ -31,6 +31,17 @@ func (p *AgentPlugin) ContractRegistry() *pb.ContractRegistry {
 				ConfigMessage: agentContractsPackage + "ProviderConfig",
 				Mode:          pb.ContractMode_CONTRACT_MODE_STRICT_PROTO,
 			},
+			// step.agent_execute + step.provider_test are app-bound steps: their
+			// execution path lazy-looks up services (agent-provider-registry,
+			// agent-tool-registry) from modular.Application, which the typed
+			// gRPC handler signature cannot access. They therefore stay on the
+			// legacy map execution path (CreateTypedStep returns
+			// ErrTypedContractNotHandled for them). They still carry strict
+			// contract DESCRIPTORS here so consumers have a validated
+			// config/input/output shape and the strict-contracts coverage gate
+			// (every advertised step type has a descriptor) passes.
+			stepContract("step.agent_execute", "AgentExecuteConfig", "AgentExecuteInput", "AgentExecuteOutput"),
+			stepContract("step.provider_test", "ProviderTestConfig", "ProviderTestInput", "ProviderTestOutput"),
 			stepContract("step.provider_models", "ProviderModelsConfig", "ProviderModelsInput", "ProviderModelsOutput"),
 			stepContract("step.model_pull", "ModelPullConfig", "ModelPullInput", "ModelPullOutput"),
 		},
