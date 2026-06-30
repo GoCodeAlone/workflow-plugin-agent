@@ -2,7 +2,6 @@ package orchestrator
 
 import (
 	"context"
-	"database/sql"
 	"encoding/json"
 	"fmt"
 
@@ -20,13 +19,12 @@ type SecurityAuditStep struct {
 func (s *SecurityAuditStep) Name() string { return s.name }
 
 func (s *SecurityAuditStep) Execute(ctx context.Context, _ *module.PipelineContext) (*module.StepResult, error) {
-	// Resolve DB from service registry.
-	var db *sql.DB
-	if svc, ok := s.app.SvcRegistry()["ratchet-db"]; ok {
-		if dbp, ok := svc.(module.DBProvider); ok {
-			db = dbp.DB()
-		}
+	// SecurityAuditStep is REQUIRED-STATEFUL on DB (needs persistence).
+	svcs := resolveServices(s.app)
+	if svcs.DB == nil {
+		return nil, fmt.Errorf("security_audit step %q: %w", s.name, ErrServiceUnavailable)
 	}
+	db := svcs.DB.DB()
 
 	auditor := NewSecurityAuditor(db, s.app)
 	report := auditor.RunAll(ctx)

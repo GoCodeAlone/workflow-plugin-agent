@@ -20,14 +20,9 @@ type MCPReloadStep struct {
 func (s *MCPReloadStep) Name() string { return s.name }
 
 func (s *MCPReloadStep) Execute(ctx context.Context, _ *module.PipelineContext) (*module.StepResult, error) {
-	// Get DB
-	var db *sql.DB
-	if svc, ok := s.app.SvcRegistry()["ratchet-db"]; ok {
-		if dbp, ok := svc.(module.DBProvider); ok {
-			db = dbp.DB()
-		}
-	}
-	if db == nil {
+	// MCPReloadStep is REQUIRED-STATEFUL on DB + MCPClientModule.
+	svcs := resolveServices(s.app)
+	if svcs.DB == nil {
 		return &module.StepResult{
 			Output: map[string]any{
 				"success": false,
@@ -35,8 +30,17 @@ func (s *MCPReloadStep) Execute(ctx context.Context, _ *module.PipelineContext) 
 			},
 		}, nil
 	}
+	db := svcs.DB.DB()
+	if db == nil {
+		return &module.StepResult{
+			Output: map[string]any{
+				"success": false,
+				"error":   "database connection is nil",
+			},
+		}, nil
+	}
 
-	// Get MCP client module
+	// Get MCP client module (module-specific lookup, not in the service bundle).
 	svc, ok := s.app.SvcRegistry()["ratchet-mcp-client"]
 	if !ok {
 		return &module.StepResult{

@@ -11,6 +11,7 @@ import (
 	"github.com/GoCodeAlone/workflow-plugin-agent/orchestrator/tools"
 	"github.com/GoCodeAlone/workflow-plugin-agent/provider"
 	"github.com/GoCodeAlone/workflow/module"
+	"github.com/GoCodeAlone/workflow/secrets"
 )
 
 // This file defines the orchestrator-scoped service interfaces that the (R)
@@ -111,6 +112,9 @@ type ToolRegistryService interface {
 	AllDefs() []provider.ToolDef
 	Execute(ctx context.Context, name string, args map[string]any) (any, error)
 	Names() []string
+	// SetPaginator attaches a ResponsePaginator that truncates large tool outputs.
+	// Added in P2-T3: step_agent_execute calls this when the registry is present.
+	SetPaginator(rp *ResponsePaginator)
 }
 
 // NullToolRegistry is a no-op ToolRegistryService. Get returns (nil,false);
@@ -123,6 +127,7 @@ func (NullToolRegistry) Names() []string                  { return nil }
 func (NullToolRegistry) Execute(_ context.Context, _ string, _ map[string]any) (any, error) {
 	return nil, ErrServiceUnavailable
 }
+func (NullToolRegistry) SetPaginator(_ *ResponsePaginator) {}
 
 // toolRegistryAdapter adapts *ToolRegistry to ToolRegistryService.
 // *ToolRegistry.Get returns (plugin.Tool, bool); the interface narrows the
@@ -136,6 +141,9 @@ func (a toolRegistryAdapter) Execute(ctx context.Context, name string, args map[
 	return a.tr.Execute(ctx, name, args)
 }
 func (a toolRegistryAdapter) Names() []string { return a.tr.Names() }
+func (a toolRegistryAdapter) SetPaginator(rp *ResponsePaginator) {
+	a.tr.SetPaginator(rp)
+}
 
 // ---------------------------------------------------------------------------
 // SecretGuard
@@ -154,6 +162,11 @@ type SecretGuardService interface {
 	Redact(text string) string
 	CheckAndRedact(msg *provider.Message) bool
 	AddKnownSecret(name, value string)
+	// Provider returns the underlying secrets.Provider so consumers can
+	// Get/Set raw secret values (webhook signature-secret lookup, human-request
+	// token auto-store). Added in P2-T3: step_webhook + step_human_request both
+	// need direct secret access that the redaction-oriented methods don't cover.
+	Provider() secrets.Provider
 }
 
 // NullSecretGuard is a no-op SecretGuardService. Redact returns its input
@@ -166,6 +179,7 @@ func (NullSecretGuard) LoadAllSecrets(_ context.Context) error          { return
 func (NullSecretGuard) Redact(text string) string                       { return text }
 func (NullSecretGuard) CheckAndRedact(_ *provider.Message) bool         { return false }
 func (NullSecretGuard) AddKnownSecret(_, _ string)                      {}
+func (NullSecretGuard) Provider() secrets.Provider                      { return nil }
 
 // ---------------------------------------------------------------------------
 // ApprovalManager

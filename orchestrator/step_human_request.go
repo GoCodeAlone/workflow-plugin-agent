@@ -21,12 +21,11 @@ type HumanRequestResolveStep struct {
 func (s *HumanRequestResolveStep) Name() string { return s.name }
 
 func (s *HumanRequestResolveStep) Execute(ctx context.Context, pc *module.PipelineContext) (*module.StepResult, error) {
-	var hrm *HumanRequestManager
-	if svc, ok := s.app.SvcRegistry()["ratchet-human-request-manager"]; ok {
-		hrm, _ = svc.(*HumanRequestManager)
-	}
-	if hrm == nil {
-		return nil, fmt.Errorf("human_request_resolve step %q: human request manager not available", s.name)
+	// HumanRequestResolveStep is REQUIRED-STATEFUL on HumanRequestService.
+	svcs := resolveServices(s.app)
+	hrm := svcs.HumanRequest
+	if IsNull(hrm) {
+		return nil, fmt.Errorf("human_request_resolve step %q: %w", s.name, ErrServiceUnavailable)
 	}
 
 	// Resolve request ID from path params or current data
@@ -72,7 +71,7 @@ func (s *HumanRequestResolveStep) Execute(ctx context.Context, pc *module.Pipeli
 
 		// If the request was for a token and metadata specifies a secret_name,
 		// auto-store the value in the SecretGuard.
-		s.autoStoreSecret(ctx, hrm, requestID, responseData)
+		s.autoStoreSecret(ctx, svcs.SecretGuard, hrm, requestID, responseData)
 
 		return &module.StepResult{
 			Output: map[string]any{
@@ -109,7 +108,7 @@ func (s *HumanRequestResolveStep) Execute(ctx context.Context, pc *module.Pipeli
 
 // autoStoreSecret checks if a resolved token request has a secret_name in its metadata,
 // and if so, stores the provided value in the SecretGuard.
-func (s *HumanRequestResolveStep) autoStoreSecret(ctx context.Context, hrm *HumanRequestManager, requestID, responseData string) {
+func (s *HumanRequestResolveStep) autoStoreSecret(ctx context.Context, guard SecretGuardService, hrm HumanRequestService, requestID, responseData string) {
 	if responseData == "" {
 		return
 	}
@@ -140,16 +139,16 @@ func (s *HumanRequestResolveStep) autoStoreSecret(ctx context.Context, hrm *Huma
 		return
 	}
 
-	if svc, ok := s.app.SvcRegistry()["ratchet-secret-guard"]; ok {
-		if guard, ok := svc.(*SecretGuard); ok {
-			if sp := guard.Provider(); sp != nil {
-				if err := sp.Set(ctx, secretName, value); err != nil {
-					fmt.Printf("ratchetplugin: failed to store secret %q: %v\n", secretName, err)
-					return
-				}
-				guard.AddKnownSecret(secretName, value)
-			}
+	// SecretGuard is TRULY-OPTIONAL: skip auto-store when absent.
+	if IsNull(guard) {
+		return
+	}
+	if sp := guard.Provider(); sp != nil {
+		if err := sp.Set(ctx, secretName, value); err != nil {
+			fmt.Printf("ratchetplugin: failed to store secret %q: %v\n", secretName, err)
+			return
 		}
+		guard.AddKnownSecret(secretName, value)
 	}
 }
 

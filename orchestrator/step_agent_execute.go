@@ -113,32 +113,23 @@ func (s *AgentExecuteStep) Execute(ctx context.Context, pc *module.PipelineConte
 		}
 	}
 
-	// Lazy-lookup services from the registry. These are registered by wiring hooks
-	// which run AFTER step factories, so they may not be available at factory time.
-	var toolRegistry *ToolRegistry
-	if svc, ok := s.app.SvcRegistry()["ratchet-tool-registry"]; ok {
-		toolRegistry, _ = svc.(*ToolRegistry)
-	}
+	// Resolve the orchestrator service bundle once. Each service is either the
+	// real implementation (when the host registered it) or a Null no-op. The
+	// agent_execute step treats these as TRULY-OPTIONAL: the loop degrades
+	// gracefully when tools/secrets/transcripts/etc. are absent.
+	svcs := resolveServices(s.app)
+	toolRegistry := svcs.ToolRegistry
+	guard := svcs.SecretGuard
+	recorder := svcs.Transcript
+	containerSvc := svcs.Container
 
 	// Apply browser text length override from step config if set.
-	if s.browserMaxTextLen > 0 && toolRegistry != nil {
+	if s.browserMaxTextLen > 0 && !IsNull(toolRegistry) {
 		if tool, ok := toolRegistry.Get("browser_navigate"); ok {
 			if bt, ok := tool.(*tools.BrowserNavigateTool); ok {
 				bt.MaxTextLength = s.browserMaxTextLen
 			}
 		}
-	}
-	var guard *SecretGuard
-	if svc, ok := s.app.SvcRegistry()["ratchet-secret-guard"]; ok {
-		guard, _ = svc.(*SecretGuard)
-	}
-	var recorder *TranscriptRecorder
-	if svc, ok := s.app.SvcRegistry()["ratchet-transcript-recorder"]; ok {
-		recorder, _ = svc.(*TranscriptRecorder)
-	}
-	var containerMgr *ContainerManager
-	if svc, ok := s.app.SvcRegistry()["ratchet-container-manager"]; ok {
-		containerMgr, _ = svc.(*ContainerManager)
 	}
 	// Look up guardrails module (optional). If present, tool calls are checked before execution.
 	guardrails := findGuardrailsModule(s.app)
@@ -188,24 +179,22 @@ func (s *AgentExecuteStep) Execute(ctx context.Context, pc *module.PipelineConte
 	if projectID != "" {
 		toolCtx = tools.WithProjectID(toolCtx, projectID)
 
-		// Look up project workspace path from DB
-		if s.app != nil {
-			if svc, ok := s.app.SvcRegistry()["ratchet-db"]; ok {
-				if dbp, ok := svc.(module.DBProvider); ok && dbp.DB() != nil {
-					var wsPath string
-					row := dbp.DB().QueryRowContext(ctx,
-						"SELECT workspace_path FROM projects WHERE id = ?", projectID,
-					)
-					if row.Scan(&wsPath) == nil && wsPath != "" {
-						toolCtx = tools.WithWorkspacePath(toolCtx, wsPath)
-					}
-				}
+		// Look up project workspace path from DB (optional: skip when no DB).
+		if svcs.DB != nil && svcs.DB.DB() != nil {
+			var wsPath string
+			row := svcs.DB.DB().QueryRowContext(ctx,
+				"SELECT workspace_path FROM projects WHERE id = ?", projectID,
+			)
+			if row.Scan(&wsPath) == nil && wsPath != "" {
+				toolCtx = tools.WithWorkspacePath(toolCtx, wsPath)
 			}
 		}
 
-		// If container manager is available, inject it as ContainerExecer
-		if containerMgr != nil && containerMgr.IsAvailable() {
-			toolCtx = context.WithValue(toolCtx, tools.ContextKeyContainerID, tools.ContainerExecer(containerMgr))
+		// If container manager is available, inject it as ContainerExecer.
+		// containerSvc (a ContainerService) satisfies tools.ContainerExecer via its
+		// ExecInContainer method when it is the real adapter (not Null).
+		if !IsNull(containerSvc) && containerSvc.IsAvailable() {
+			toolCtx = context.WithValue(toolCtx, tools.ContextKeyContainerID, tools.ContainerExecer(containerSvc))
 		}
 	}
 
@@ -216,21 +205,16 @@ func (s *AgentExecuteStep) Execute(ctx context.Context, pc *module.PipelineConte
 		}
 	}
 
-	// Skill injection: augment system prompt with assigned skill content.
-	if svc, ok := s.app.SvcRegistry()["ratchet-skill-manager"]; ok {
-		if sm, ok := svc.(*SkillManager); ok {
-			if skillPrompt, err := sm.BuildSkillPrompt(ctx, agentID); err == nil && skillPrompt != "" {
-				systemPrompt = systemPrompt + "\n\n" + skillPrompt
-			}
+	// Skill injection: augment system prompt with assigned skill content (optional).
+	if !IsNull(svcs.Skill) {
+		if skillPrompt, err := svcs.Skill.BuildSkillPrompt(ctx, agentID); err == nil && skillPrompt != "" {
+			systemPrompt = systemPrompt + "\n\n" + skillPrompt
 		}
 	}
 
 	// Memory injection: augment system prompt with relevant memories before building messages.
-	var memoryStore *MemoryStore
-	if svc, ok := s.app.SvcRegistry()["ratchet-memory-store"]; ok {
-		memoryStore, _ = svc.(*MemoryStore)
-	}
-	if memoryStore != nil && agentID != "" {
+	memoryStore := svcs.Memory
+	if !IsNull(memoryStore) && agentID != "" {
 		memories, searchErr := memoryStore.Search(ctx, agentID, taskDescription, 5)
 		if searchErr == nil && len(memories) > 0 {
 			var sb strings.Builder
@@ -271,12 +255,12 @@ func (s *AgentExecuteStep) Execute(ctx context.Context, pc *module.PipelineConte
 
 	// Get tool definitions
 	var toolDefs []provider.ToolDef
-	if toolRegistry != nil {
+	if !IsNull(toolRegistry) {
 		toolDefs = toolRegistry.AllDefs()
 	}
 
 	// Record system prompt and user message
-	if recorder != nil {
+	if !IsNull(recorder) {
 		for _, msg := range messages {
 			_ = recorder.Record(ctx, TranscriptEntry{
 				ID:        uuid.New().String(),
@@ -310,7 +294,7 @@ func (s *AgentExecuteStep) Execute(ctx context.Context, pc *module.PipelineConte
 	}
 
 	// Wire response paginator so large tool outputs are paginated instead of truncated.
-	if toolRegistry != nil {
+	if !IsNull(toolRegistry) {
 		contextWindow := defaultContextLimit
 		if cw, ok := aiProvider.(interface{ ContextWindow() int }); ok {
 			if w := cw.ContextWindow(); w > 0 {
@@ -351,7 +335,7 @@ func (s *AgentExecuteStep) Execute(ctx context.Context, pc *module.PipelineConte
 			if contextStrategy != nil {
 				lastSentIndex = 0 // resend full compacted history after reset
 			}
-			if recorder != nil {
+			if !IsNull(recorder) {
 				_ = recorder.Record(ctx, TranscriptEntry{
 					ID:        uuid.New().String(),
 					AgentID:   agentID,
@@ -368,7 +352,7 @@ func (s *AgentExecuteStep) Execute(ctx context.Context, pc *module.PipelineConte
 		}
 
 		// Redact secrets from messages before sending to LLM
-		if guard != nil {
+		if !IsNull(guard) {
 			for i := range messages {
 				guard.CheckAndRedact(&messages[i])
 			}
@@ -417,7 +401,7 @@ func (s *AgentExecuteStep) Execute(ctx context.Context, pc *module.PipelineConte
 		finalContent = resp.Content
 
 		// Record assistant response
-		if recorder != nil {
+		if !IsNull(recorder) {
 			_ = recorder.Record(ctx, TranscriptEntry{
 				ID:        uuid.New().String(),
 				AgentID:   agentID,
@@ -532,7 +516,7 @@ func (s *AgentExecuteStep) Execute(ctx context.Context, pc *module.PipelineConte
 			}
 
 			if !isError {
-				if toolRegistry != nil {
+				if !IsNull(toolRegistry) {
 					result, execErr := toolRegistry.Execute(toolCtx, tc.Name, tc.Arguments)
 					if execErr != nil {
 						resultStr = fmt.Sprintf("Error: %v", execErr)
@@ -595,7 +579,7 @@ func (s *AgentExecuteStep) Execute(ctx context.Context, pc *module.PipelineConte
 			}
 
 			// Redact tool results
-			if guard != nil {
+			if !IsNull(guard) {
 				resultStr = guard.Redact(resultStr)
 			}
 
@@ -606,7 +590,7 @@ func (s *AgentExecuteStep) Execute(ctx context.Context, pc *module.PipelineConte
 			})
 
 			// Record tool result
-			if recorder != nil {
+			if !IsNull(recorder) {
 				_ = recorder.Record(ctx, TranscriptEntry{
 					ID:         uuid.New().String(),
 					AgentID:    agentID,
@@ -629,7 +613,7 @@ func (s *AgentExecuteStep) Execute(ctx context.Context, pc *module.PipelineConte
 					Role:    provider.RoleUser,
 					Content: warningContent,
 				})
-				if recorder != nil {
+				if !IsNull(recorder) {
 					_ = recorder.Record(ctx, TranscriptEntry{
 						ID:        uuid.New().String(),
 						AgentID:   agentID,
@@ -648,7 +632,7 @@ func (s *AgentExecuteStep) Execute(ctx context.Context, pc *module.PipelineConte
 							"agent", agentName, "iteration", iterCount, "reason", loopMsg)
 					}
 				}
-				if recorder != nil {
+				if !IsNull(recorder) {
 					_ = recorder.Record(ctx, TranscriptEntry{
 						ID:        uuid.New().String(),
 						AgentID:   agentID,
@@ -679,21 +663,19 @@ func (s *AgentExecuteStep) Execute(ctx context.Context, pc *module.PipelineConte
 	}
 
 	// Cancel any orphaned sub-agent tasks when the parent agent completes.
-	if svc, ok := s.app.SvcRegistry()["ratchet-sub-agent-manager"]; ok {
-		if sam, ok := svc.(*SubAgentManager); ok {
-			if cancelErr := sam.CancelChildren(ctx, agentID); cancelErr != nil {
-				if s.app != nil {
-					if logger := s.app.Logger(); logger != nil {
-						logger.Warn("agent_execute: failed to cancel sub-agent children",
-							"agent", agentName, "error", cancelErr)
-					}
+	if !IsNull(svcs.SubAgent) {
+		if cancelErr := svcs.SubAgent.CancelChildren(ctx, agentID); cancelErr != nil {
+			if s.app != nil {
+				if logger := s.app.Logger(); logger != nil {
+					logger.Warn("agent_execute: failed to cancel sub-agent children",
+						"agent", agentName, "error", cancelErr)
 				}
 			}
 		}
 	}
 
 	// Auto-extraction: save key facts from the conversation to persistent memory.
-	if memoryStore != nil && agentID != "" {
+	if !IsNull(memoryStore) && agentID != "" {
 		var transcriptBuilder strings.Builder
 		for _, msg := range messages {
 			if msg.Role == provider.RoleAssistant && msg.Content != "" {
@@ -772,12 +754,9 @@ func (s *AgentExecuteStep) handleApprovalWait(ctx context.Context, toolResult, a
 		return toolResult, false // no approval ID, just continue
 	}
 
-	// Lazy-lookup ApprovalManager
-	var am *ApprovalManager
-	if svc, ok := s.app.SvcRegistry()["ratchet-approval-manager"]; ok {
-		am, _ = svc.(*ApprovalManager)
-	}
-	if am == nil {
+	// Resolve ApprovalManager via the service bundle (Null when absent).
+	am := resolveServices(s.app).Approval
+	if IsNull(am) {
 		// No manager available — just continue without blocking
 		return toolResult, false
 	}
@@ -830,11 +809,9 @@ func (s *AgentExecuteStep) handleHumanRequestWait(ctx context.Context, toolResul
 		return "", false
 	}
 
-	var hrm *HumanRequestManager
-	if svc, ok := s.app.SvcRegistry()["ratchet-human-request-manager"]; ok {
-		hrm, _ = svc.(*HumanRequestManager)
-	}
-	if hrm == nil {
+	// Resolve HumanRequestManager via the service bundle (Null when absent).
+	hrm := resolveServices(s.app).HumanRequest
+	if IsNull(hrm) {
 		return "", false
 	}
 

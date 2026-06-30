@@ -466,3 +466,148 @@ func TestResolveServices_AcceptsModularApplication(t *testing.T) {
 		t.Error("expected Null Blackboard on empty modular.Application")
 	}
 }
+
+// ---------------------------------------------------------------------------
+// Multi-dep (R) steps end-to-end via resolveServices (P2-T3)
+// ---------------------------------------------------------------------------
+
+// TestResolveServices_RefactoredWebhookProcessMultiDep proves a multi-dep
+// refactored step (WebhookProcessStep — REQUIRED-STATEFUL on WebhookService + DB,
+// TRULY-OPTIONAL on SecretGuard) resolves ALL its dependencies through
+// resolveServices and executes end-to-end. This is the pattern proof that
+// generalizes from the single-dep T2 steps to the multi-dep T3 steps: the step
+// calls resolveServices once, picks the fields it needs, and enforces
+// required-stateful via IsNull + ErrServiceUnavailable.
+func TestResolveServices_RefactoredWebhookProcessMultiDep(t *testing.T) {
+	app := newMockApp()
+	db := injectAll(t, app)
+	// WebhookProcessStep needs the webhooks + tasks tables.
+	if _, err := db.Exec(createWebhooksTable); err != nil {
+		t.Fatalf("create webhooks table: %v", err)
+	}
+	if _, err := db.Exec(createTasksTable); err != nil {
+		t.Fatalf("create tasks table: %v", err)
+	}
+	// Seed a webhook config so GetBySource returns a match.
+	if _, err := db.Exec(`INSERT INTO webhooks (id, source, name, secret_name, filter, task_template, enabled)
+		VALUES (?, 'github', 'test-hook', '', '', '{"title":"{{.payload.action}}","description":"event"}', 1)`,
+		"wh-test-1"); err != nil {
+		t.Fatalf("seed webhook: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+
+	// Wire DB under ratchet-db so resolveServices picks it up (injectAll does not).
+	app.services["ratchet-db"] = stubDBProvider{db: db}
+
+	// resolveServices sees the injected webhook manager + DB + secret guard.
+	b := resolveServices(app)
+	if IsNull(b.Webhook) {
+		t.Fatal("precondition: Webhook is Null after injection")
+	}
+	if b.DB == nil {
+		t.Fatal("precondition: DB is nil after wiring ratchet-db")
+	}
+	if IsNull(b.SecretGuard) {
+		t.Fatal("precondition: SecretGuard is Null after injection")
+	}
+
+	step := &WebhookProcessStep{name: "wh-process-test", app: app}
+	pc := &module.PipelineContext{
+		Current: map[string]any{
+			"path_params": map[string]any{"source": "github"},
+			"body":        map[string]any{"action": "opened"},
+		},
+	}
+	res, err := step.Execute(context.Background(), pc)
+	if err != nil {
+		t.Fatalf("WebhookProcessStep.Execute err = %v, want nil (services injected)", err)
+	}
+	if res.Output["processed"] != true {
+		t.Errorf("output = %#v, want processed=true", res.Output)
+	}
+	if count, _ := res.Output["tasks_created"].(int); count != 1 {
+		t.Errorf("tasks_created = %d, want 1", count)
+	}
+}
+
+// TestResolveServices_WebhookProcessAbsentSurfacesError proves the
+// REQUIRED-STATEFUL contract on WebhookService: when the webhook manager is
+// absent, the step returns ErrServiceUnavailable (not a panic, not a bespoke
+// error message).
+func TestResolveServices_WebhookProcessAbsentSurfacesError(t *testing.T) {
+	app := newMockApp() // nothing injected
+
+	b := resolveServices(app)
+	if !IsNull(b.Webhook) {
+		t.Fatal("precondition: Webhook must be Null on empty app")
+	}
+
+	step := &WebhookProcessStep{name: "wh-process-absent", app: app}
+	pc := &module.PipelineContext{
+		Current: map[string]any{
+			"path_params": map[string]any{"source": "github"},
+		},
+	}
+	_, err := step.Execute(context.Background(), pc)
+	if err == nil {
+		t.Fatal("WebhookProcessStep.Execute err = nil, want error (service absent)")
+	}
+	if !errors.Is(err, ErrServiceUnavailable) {
+		t.Errorf("err = %v, want errors.Is ErrServiceUnavailable", err)
+	}
+}
+
+// TestResolveServices_AgentExecuteBundleResolution proves the agent_execute
+// step's full service bundle resolves correctly through resolveServices — the
+// 10 in-bundle services it consumes (ToolRegistry, SecretGuard, Memory,
+// Blackboard-via-input, Approval, HumanRequest, SubAgent, Skill, Transcript,
+// Container, DB) are all real when injected and all Null when absent. This is
+// the wiring proof for the headline step of T3 without needing a live LLM
+// provider (which would make it an e2e test, not a wiring test).
+func TestResolveServices_AgentExecuteBundleResolution(t *testing.T) {
+	// Injected → every service agent_execute consumes is real.
+	app := newMockApp()
+	db := injectAll(t, app)
+	t.Cleanup(func() { _ = db.Close() })
+	app.services["ratchet-db"] = stubDBProvider{db: db}
+
+	b := resolveServices(app)
+	for name, svc := range map[string]any{
+		"ToolRegistry":  b.ToolRegistry,
+		"SecretGuard":   b.SecretGuard,
+		"Memory":        b.Memory,
+		"Approval":      b.Approval,
+		"HumanRequest":  b.HumanRequest,
+		"SubAgent":      b.SubAgent,
+		"Skill":         b.Skill,
+		"Transcript":    b.Transcript,
+		"Container":     b.Container,
+	} {
+		if IsNull(svc) {
+			t.Errorf("agent_execute dep %s is Null after injection, want real", name)
+		}
+	}
+	if b.DB == nil {
+		t.Error("agent_execute dep DB is nil after injection, want real")
+	}
+
+	// Absent → every service is Null, no panic (agent_execute treats these as
+	// TRULY-OPTIONAL, so Null is the expected graceful-degrade path).
+	empty := newMockApp()
+	eb := resolveServices(empty)
+	for name, svc := range map[string]any{
+		"ToolRegistry": eb.ToolRegistry,
+		"SecretGuard":  eb.SecretGuard,
+		"Memory":       eb.Memory,
+		"Approval":     eb.Approval,
+		"HumanRequest": eb.HumanRequest,
+		"SubAgent":     eb.SubAgent,
+		"Skill":        eb.Skill,
+		"Transcript":   eb.Transcript,
+		"Container":    eb.Container,
+	} {
+		if !IsNull(svc) {
+			t.Errorf("agent_execute dep %s = %T on empty app, want Null", name, svc)
+		}
+	}
+}
