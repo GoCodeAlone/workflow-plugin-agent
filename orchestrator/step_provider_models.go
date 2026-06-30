@@ -17,7 +17,12 @@ type ProviderModelsStep struct {
 func (s *ProviderModelsStep) Name() string { return s.name }
 
 func (s *ProviderModelsStep) Execute(ctx context.Context, pc *module.PipelineContext) (*module.StepResult, error) {
-	body := extractBody(pc)
+	// Extract the request body from the pipeline context. After step.request_parse
+	// the body is in pc.Current["body"]; fall back to the whole Current map.
+	body, _ := pc.Current["body"].(map[string]any)
+	if body == nil {
+		body = pc.Current
+	}
 	providerType := extractString(body, "type", "")
 	apiKey := extractString(body, "api_key", "")
 	baseURL := extractString(body, "base_url", "")
