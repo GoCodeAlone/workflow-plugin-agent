@@ -20,6 +20,10 @@ package orchestrator
 
 import (
 	"context"
+	"encoding/json"
+	"os"
+	"path/filepath"
+	"runtime"
 	"sort"
 	"testing"
 
@@ -96,6 +100,93 @@ func TestUnionAdapterStepTypesExactUnion(t *testing.T) {
 	}
 }
 
+// pluginJSONStepTypes loads plugin.json (one dir above this package) and returns
+// its capabilities.stepTypes. Used by the bidirectional drift gate below.
+type pluginJSONCapabilities struct {
+	Capabilities struct {
+		StepTypes []string `json:"stepTypes"`
+	} `json:"capabilities"`
+}
+
+func loadPluginJSONStepTypes(t *testing.T) []string {
+	t.Helper()
+	_, file, _, ok := runtime.Caller(0)
+	if !ok {
+		t.Fatal("runtime.Caller failed")
+	}
+	data, err := os.ReadFile(filepath.Join(filepath.Dir(file), "..", "plugin.json"))
+	if err != nil {
+		t.Fatalf("read plugin.json: %v", err)
+	}
+	var manifest pluginJSONCapabilities
+	if err := json.Unmarshal(data, &manifest); err != nil {
+		t.Fatalf("parse plugin.json: %v", err)
+	}
+	if len(manifest.Capabilities.StepTypes) == 0 {
+		t.Fatal("plugin.json capabilities.stepTypes is empty")
+	}
+	return manifest.Capabilities.StepTypes
+}
+
+// TestStepTypesUnionServed is the PR4 headline gate. Once main.go is wired to
+// serve the union adapter (cmd/workflow-plugin-agent/main.go), this is the value
+// the gRPC GetManifest handler advertises to the host. It asserts TWO things:
+//
+//  1. Manifest().Name == "workflow-plugin-agent" (the ADR 0053 fold-in: served
+//     under the AGENT name, not ratchet).
+//  2. The served StepTypes() (7) and plugin.json-declared stepTypes (7) AGREE
+//     BIDIRECTIONALLY — declared⊆served AND served⊆declared. This is the P6
+//     drift gate the operator deferred from PR3 to PR4: with main.go serving the
+//     union, the third invariant (every declared stepType MUST be served) holds
+//     again, so the gate is now bidirectional here (the agent-package
+//     TestPluginJSONStepTypesMatchRuntimeTruth covers runtime⊆declared for the
+//     agent-only 4; the bidirectional 7-vs-7 contract lives here because the
+//     served union adapter is the runtime truth once main.go is wired).
+//
+// This test FAILS before main.go is wired ONLY if it is run against the served
+// binary; against NewUnionAdapter() directly it passes regardless of main.go
+// (the adapter always returned 7). The main.go wiring is asserted by the
+// verify-capabilities evidence in the PR4 description + the cmd-level build.
+func TestStepTypesUnionServed(t *testing.T) {
+	a := NewUnionAdapter()
+
+	// Fold-in: served under the AGENT plugin name (ADR 0053).
+	if m := a.Manifest(); m.Name != "workflow-plugin-agent" {
+		t.Fatalf("Manifest().Name = %q, want %q (ADR 0053 fold-in under agent name)", m.Name, "workflow-plugin-agent")
+	}
+
+	served := a.StepTypes()
+	declared := loadPluginJSONStepTypes(t)
+
+	// Bidirectional set equality: served == declared.
+	servedSet := map[string]bool{}
+	for _, s := range served {
+		servedSet[s] = true
+	}
+	declaredSet := map[string]bool{}
+	for _, s := range declared {
+		declaredSet[s] = true
+	}
+
+	// declared ⊆ served (the invariant PR3 DEFERRED — now restored: every
+	// plugin.json-declared stepType MUST be served by the binary).
+	for s := range declaredSet {
+		if !servedSet[s] {
+			t.Errorf("plugin.json declares %q but the union adapter does NOT serve it (declared⊆served drift — P6 gate)", s)
+		}
+	}
+	// served ⊆ declared (every served step MUST be advertised).
+	for s := range servedSet {
+		if !declaredSet[s] {
+			t.Errorf("union adapter serves %q but plugin.json does NOT declare it (served⊆declared drift — P6 gate)", s)
+		}
+	}
+	// Cardinality parity (catches a duplicate-count mask).
+	if len(served) != len(declared) {
+		t.Errorf("served=%d vs declared=%d stepTypes (cardinality drift); served=%v declared=%v", len(served), len(declared), served, declared)
+	}
+}
+
 func TestUnionAdapterCreateStepDispatchesBothMaps(t *testing.T) {
 	a := NewUnionAdapter()
 
@@ -116,6 +207,26 @@ func TestUnionAdapterCreateStepDispatchesBothMaps(t *testing.T) {
 	}
 	if agentStep == nil {
 		t.Fatal("CreateStep(step.provider_models) returned nil StepInstance")
+	}
+
+	// step.agent_execute is the highest-collision-risk type in the union: it is
+	// the one type BOTH RatchetPlugin.StepFactories() AND agent.StepFactories()
+	// serve (the orchestrator's step_agent_execute.go is the upstream refactor
+	// target; the agent's step_agent_execute.go is the legacy holder). The
+	// adapter must route it AGENT-side (its dispatch source-of-truth is the
+	// agent's StepTypes()), NOT orchestrator-side. Assert dispatch succeeds and
+	// returns a non-nil sdk.StepInstance — proving the agent-owned legacy type
+	// is reachable. We deliberately do NOT Execute it: agent_execute is
+	// required-stateful (looks up the agent-provider-registry from
+	// modular.Application), so executing under the empty config here would
+	// panic/no-op rather than exercise meaningful behavior. Dispatch-only is the
+	// correct fidelity for a routing assertion. (PR2 review Minor carry-in.)
+	agentExecStep, err := a.CreateStep("step.agent_execute", "ax", map[string]any{})
+	if err != nil {
+		t.Fatalf("CreateStep(step.agent_execute) error: %v (must route agent-side; the orchestrator-side map does not hold it)", err)
+	}
+	if agentExecStep == nil {
+		t.Fatal("CreateStep(step.agent_execute) returned nil StepInstance")
 	}
 
 	// The two must be served by *different* underlying factories (proving the

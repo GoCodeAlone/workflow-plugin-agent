@@ -131,7 +131,10 @@ func (p *AgentPlugin) CreateStep(typeName, name string, config map[string]any) (
 	if !ok {
 		return nil, fmt.Errorf("agent plugin: step factory returned %T", step)
 	}
-	return legacyStepInstance{step: pipelineStep}, nil
+	// Single-sourced wrap: route through NewLegacyStepInstance so AgentPlugin
+	// and the orchestrator union adapter (orchestrator/grpc_adapter.go) share
+	// ONE boundary. (PR2 review Minor carry-in.)
+	return NewLegacyStepInstance(pipelineStep), nil
 }
 
 // TypedStepTypes implements sdk.TypedStepProvider.
