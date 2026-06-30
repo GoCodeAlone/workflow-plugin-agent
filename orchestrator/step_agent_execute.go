@@ -843,7 +843,7 @@ func (s *AgentExecuteStep) handleHumanRequestWait(ctx context.Context, toolResul
 		var msg string
 		if req.RequestType == RequestTypeToken {
 			// Do not leak secret values into the agent transcript/LLM context.
-			// Reference the secret_name from metadata so the agent can read via SecretGuard.
+			// Reference the secret_name from metadata so the agent can read it via the secret store.
 			secretRef := "the configured secret store"
 			var meta map[string]any
 			if jsonErr := json.Unmarshal([]byte(req.Metadata), &meta); jsonErr == nil {

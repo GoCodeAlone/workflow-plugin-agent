@@ -7,10 +7,56 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/GoCodeAlone/modular"
 	"github.com/GoCodeAlone/workflow-plugin-agent/executor"
 	"github.com/GoCodeAlone/workflow-plugin-agent/provider"
 	"github.com/GoCodeAlone/workflow/secrets"
 )
+
+// fakeVaultModule mimics the engine module.SecretsVaultModule shape: it is
+// registered under its config name in the service registry and exposes a
+// Provider() secrets.Provider accessor that the lazy-resolver type-asserts on.
+// (Moved here from secret_guard_lazy_test.go when SecretGuard was deleted.)
+type fakeVaultModule struct {
+	name string
+	p    secrets.Provider
+}
+
+func (f *fakeVaultModule) Provider() secrets.Provider { return f.p }
+
+// lazyStubApp is a minimal modular.Application whose SvcRegistry returns the
+// vault-module-shaped service the lazy-resolver looks up. It reuses the
+// embedded modular.Application pattern from mockApp so it satisfies the full
+// interface. (Moved here from secret_guard_lazy_test.go.)
+type lazyStubApp struct {
+	modular.Application
+	services map[string]any
+}
+
+func (a *lazyStubApp) SvcRegistry() modular.ServiceRegistry {
+	return modular.ServiceRegistry(a.services)
+}
+
+func (a *lazyStubApp) RegisterService(name string, svc any) error {
+	a.services[name] = svc
+	return nil
+}
+
+func (a *lazyStubApp) Logger() modular.Logger { return &noopLogger{} }
+
+// startableVaultModule models the engine secrets.vault module lifecycle: it is
+// registered in the service registry at init time but its Provider() is nil
+// until Start() is called (post-wiring). This lets the registry test faithfully
+// reproduce the pre-Start (nil) → post-Start (populated) transition.
+// (Moved here from secret_guard_lazy_test.go.)
+type startableVaultModule struct {
+	p secrets.Provider
+}
+
+func (m *startableVaultModule) Provider() secrets.Provider { return m.p }
+
+// Start mirrors module.Start(): populates the Provider (post-wiring).
+func (m *startableVaultModule) Start(p secrets.Provider) { m.p = p }
 
 // These tests cover the new secretsHolder + secretService composite (the
 // additive replacement for SecretGuard). They PORT the D19 lazy-resolve +

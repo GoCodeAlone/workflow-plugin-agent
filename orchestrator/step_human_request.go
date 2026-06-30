@@ -70,7 +70,7 @@ func (s *HumanRequestResolveStep) Execute(ctx context.Context, pc *module.Pipeli
 		}
 
 		// If the request was for a token and metadata specifies a secret_name,
-		// auto-store the value in the SecretGuard.
+		// auto-store the value in the secretService composite's provider.
 		s.autoStoreSecret(ctx, svcs.SecretGuard, hrm, requestID, responseData)
 
 		return &module.StepResult{
