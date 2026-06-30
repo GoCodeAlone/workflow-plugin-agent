@@ -6,9 +6,17 @@ import (
 	"testing"
 
 	"github.com/GoCodeAlone/workflow-plugin-agent/provider"
+	"github.com/GoCodeAlone/workflow/secrets"
 
 	_ "modernc.org/sqlite"
 )
+
+// newProviderRegistry wraps a concrete secrets.Provider in an accessor for
+// tests that don't exercise the lazy path (back-compat with the pre-fix call
+// shape NewProviderRegistry(db, sec)).
+func newProviderRegistry(db *sql.DB, sec secrets.Provider) *ProviderRegistry {
+	return NewProviderRegistry(db, func() secrets.Provider { return sec })
+}
 
 // memSecretsProvider is an in-memory secrets provider for testing.
 type memSecretsProvider struct {
@@ -81,7 +89,7 @@ func TestProviderRegistryGetByAlias_Mock(t *testing.T) {
 		t.Fatalf("insert: %v", err)
 	}
 
-	reg := NewProviderRegistry(db, secrets)
+	reg := newProviderRegistry(db, secrets)
 	p, err := reg.GetByAlias(context.Background(), "test-mock")
 	if err != nil {
 		t.Fatalf("GetByAlias: %v", err)
@@ -112,7 +120,7 @@ func TestProviderRegistryGetByAlias_Anthropic(t *testing.T) {
 		t.Fatalf("insert: %v", err)
 	}
 
-	reg := NewProviderRegistry(db, sec)
+	reg := newProviderRegistry(db, sec)
 	p, err := reg.GetByAlias(context.Background(), "my-claude")
 	if err != nil {
 		t.Fatalf("GetByAlias: %v", err)
@@ -131,7 +139,7 @@ func TestProviderRegistryGetDefault(t *testing.T) {
 		t.Fatalf("insert: %v", err)
 	}
 
-	reg := NewProviderRegistry(db, sec)
+	reg := newProviderRegistry(db, sec)
 	p, err := reg.GetDefault(context.Background())
 	if err != nil {
 		t.Fatalf("GetDefault: %v", err)
@@ -145,7 +153,7 @@ func TestProviderRegistryGetDefault_NoDefault(t *testing.T) {
 	db := setupTestDB(t)
 	sec := &memSecretsProvider{data: map[string]string{}}
 
-	reg := NewProviderRegistry(db, sec)
+	reg := newProviderRegistry(db, sec)
 	_, err := reg.GetDefault(context.Background())
 	if err == nil {
 		t.Fatal("expected error when no default provider exists")
@@ -156,7 +164,7 @@ func TestProviderRegistryNotFound(t *testing.T) {
 	db := setupTestDB(t)
 	sec := &memSecretsProvider{data: map[string]string{}}
 
-	reg := NewProviderRegistry(db, sec)
+	reg := newProviderRegistry(db, sec)
 	_, err := reg.GetByAlias(context.Background(), "nonexistent")
 	if err == nil {
 		t.Fatal("expected error for nonexistent alias")
@@ -172,7 +180,7 @@ func TestProviderRegistryInvalidateCache(t *testing.T) {
 		t.Fatalf("insert: %v", err)
 	}
 
-	reg := NewProviderRegistry(db, sec)
+	reg := newProviderRegistry(db, sec)
 
 	// Populate cache
 	p1, err := reg.GetByAlias(context.Background(), "cached")
@@ -205,7 +213,7 @@ func TestProviderRegistryInvalidateCacheBySecret(t *testing.T) {
 		t.Fatalf("insert: %v", err)
 	}
 
-	reg := NewProviderRegistry(db, sec)
+	reg := newProviderRegistry(db, sec)
 
 	// Populate cache
 	_, err = reg.GetByAlias(context.Background(), "uses-secret")
@@ -241,7 +249,7 @@ func TestProviderRegistryUnknownType(t *testing.T) {
 		t.Fatalf("insert: %v", err)
 	}
 
-	reg := NewProviderRegistry(db, sec)
+	reg := newProviderRegistry(db, sec)
 	_, err = reg.GetByAlias(context.Background(), "bad-type")
 	if err == nil {
 		t.Fatal("expected error for unknown provider type")
@@ -257,7 +265,7 @@ func TestProviderRegistryTestConnection(t *testing.T) {
 		t.Fatalf("insert: %v", err)
 	}
 
-	reg := NewProviderRegistry(db, sec)
+	reg := newProviderRegistry(db, sec)
 	ok, msg, latency, err := reg.TestConnection(context.Background(), "test-conn")
 	if err != nil {
 		t.Fatalf("TestConnection: %v", err)
@@ -301,7 +309,7 @@ func TestProviderRegistryNewProviderTypes(t *testing.T) {
 				t.Fatalf("insert: %v", err)
 			}
 
-			reg := NewProviderRegistry(db, sec)
+			reg := newProviderRegistry(db, sec)
 			p, err := reg.GetByAlias(t.Context(), tt.name)
 			if err != nil {
 				t.Fatalf("GetByAlias: %v", err)
@@ -316,7 +324,7 @@ func TestProviderRegistryNewProviderTypes(t *testing.T) {
 func TestProviderRegistryVertexFactoryRegistered(t *testing.T) {
 	db := setupTestDB(t)
 	sec := &memSecretsProvider{data: map[string]string{}}
-	reg := NewProviderRegistry(db, sec)
+	reg := newProviderRegistry(db, sec)
 
 	if _, ok := reg.factories["anthropic_vertex"]; !ok {
 		t.Fatal("anthropic_vertex factory not registered")
@@ -346,7 +354,7 @@ func TestProviderRegistryChatMock(t *testing.T) {
 		t.Fatalf("insert: %v", err)
 	}
 
-	reg := NewProviderRegistry(db, sec)
+	reg := newProviderRegistry(db, sec)
 	p, err := reg.GetByAlias(context.Background(), "chat-mock")
 	if err != nil {
 		t.Fatalf("GetByAlias: %v", err)

@@ -9,9 +9,9 @@ import (
 	"strings"
 
 	"github.com/GoCodeAlone/modular"
-	"github.com/GoCodeAlone/workflow-plugin-agent/provider"
-	"github.com/GoCodeAlone/workflow-plugin-agent/orchestrator/tools"
 	agentplugin "github.com/GoCodeAlone/workflow-plugin-agent"
+	"github.com/GoCodeAlone/workflow-plugin-agent/orchestrator/tools"
+	"github.com/GoCodeAlone/workflow-plugin-agent/provider"
 	"github.com/GoCodeAlone/workflow-plugin-authz/authz"
 	"github.com/GoCodeAlone/workflow/capability"
 	"github.com/GoCodeAlone/workflow/config"
@@ -97,12 +97,12 @@ func (p *RatchetPlugin) StepFactories() map[string]plugin.StepFactory {
 		"step.bcrypt_hash":           newBcryptHashFactory(),
 		"step.jwt_generate":          newJWTGenerateFactory(),
 		"step.jwt_decode":            newJWTDecodeFactory(),
-		"step.blackboard_post":          newBlackboardPostFactory(),
-		"step.blackboard_read":          newBlackboardReadFactory(),
-		"step.self_improve_validate":    newSelfImproveValidateFactory(),
-		"step.self_improve_diff":        newSelfImproveDiffFactory(),
-		"step.self_improve_deploy":      newSelfImproveDeployFactory(),
-		"step.lsp_diagnose":             newLSPDiagnoseFactory(),
+		"step.blackboard_post":       newBlackboardPostFactory(),
+		"step.blackboard_read":       newBlackboardReadFactory(),
+		"step.self_improve_validate": newSelfImproveValidateFactory(),
+		"step.self_improve_diff":     newSelfImproveDiffFactory(),
+		"step.self_improve_deploy":   newSelfImproveDeployFactory(),
+		"step.lsp_diagnose":          newLSPDiagnoseFactory(),
 	}
 
 	// Merge in authz step factories (step.authz_check_casbin, step.authz_add_policy, etc.)
@@ -188,68 +188,46 @@ func (p *RatchetPlugin) ModuleSchemas() []*schema.ModuleSchema {
 }
 
 // secretsGuardHook creates a SecretGuard and registers it in the service registry.
-// It defaults to vault-dev (managed HashiCorp Vault dev server).
-// Backend selection priority:
-//  1. data/vault-config.json (vault-remote or vault-dev)
-//  2. Default: vault-dev
-//  3. Fallback: FileProvider if vault binary is not available
 //
-// Also loads RATCHET_* environment variables for backward compatibility.
+// Phase 3 (D19): the vault backend is now owned by the engine secrets.vault
+// module (declared by the host in config), NOT constructed inline here. Because
+// wiring hooks run in BuildFromConfig BEFORE module Start() — so the engine
+// module's Provider() is nil at hook time — the guard is armed to LAZILY resolve
+// the module's Provider on its first redaction call (post-Start) via
+// AttachLazyVault. The vault module service key defaults to "vault" and can be
+// overridden via the RATCHET_VAULT_MODULE env var.
+//
+// P13 (preserved): RATCHET_* env-var secrets + a remote-vault token (when a
+// saved vault-config is present) are still loaded into the guard's knownValues
+// for free-text redaction — this is orthogonal to the Provider source and must
+// not regress.
 func secretsGuardHook() plugin.WiringHook {
 	return plugin.WiringHook{
 		Name:     "ratchet.secrets_guard",
 		Priority: 85,
 		Hook: func(app modular.Application, _ *config.WorkflowConfig) error {
-			var sp secrets.Provider
-			backendName := "vault-dev"
+			// No inline provider construction: the engine secrets.vault module
+			// owns the backend. The guard resolves it lazily on first redaction.
+			guard := NewSecretGuard(nil, "")
 
-			// Check for saved vault config
-			vcfg, _ := LoadVaultConfig(vaultConfigDir())
-
-			if vcfg != nil && vcfg.Backend == "vault-remote" && vcfg.Address != "" && vcfg.Token != "" {
-				// Use remote vault from saved config
-				vp, err := secrets.NewVaultProvider(secrets.VaultConfig{
-					Address:   vcfg.Address,
-					Token:     vcfg.Token,
-					MountPath: vcfg.MountPath,
-					Namespace: vcfg.Namespace,
-				})
-				if err != nil {
-					app.Logger().Warn("vault-remote config found but connection failed, falling back to vault-dev", "error", err)
-				} else {
-					sp = vp
-					backendName = "vault-remote"
-				}
+			// Arm lazy resolution against the engine secrets.vault module.
+			vaultModuleKey := os.Getenv("RATCHET_VAULT_MODULE")
+			if vaultModuleKey == "" {
+				vaultModuleKey = "vault"
 			}
-
-			// Default to vault-dev if no remote configured
-			if sp == nil {
-				dp, err := secrets.NewDevVaultProvider(secrets.DevVaultConfig{})
-				if err != nil {
-					app.Logger().Warn("vault-dev not available (vault binary not found), falling back to file provider", "error", err)
-					sp = newFileProvider(app)
-					backendName = "file"
-				} else {
-					sp = dp
-					backendName = "vault-dev"
-					_ = app.RegisterService("ratchet-vault-dev", dp)
-				}
-			}
-
-			guard := NewSecretGuard(sp, backendName)
+			guard.AttachLazyVault(app, vaultModuleKey)
 
 			ctx := context.Background()
 
-			// Load all secrets from the provider
-			_ = guard.LoadAllSecrets(ctx)
-
-			// Register vault token for redaction if using remote vault
-			if vcfg != nil && vcfg.Token != "" {
+			// P13: register a remote-vault token for redaction if a saved config
+			// is present (the token itself must never leak into LLM output even
+			// though the engine module now owns the connection).
+			if vcfg, _ := LoadVaultConfig(vaultConfigDir()); vcfg != nil && vcfg.Token != "" {
 				guard.AddKnownSecret("VAULT_TOKEN", vcfg.Token)
 			}
 
-			// Backward compat: also load RATCHET_* env vars into SecretGuard
-			// (These are loaded for redaction only; the env provider is not the primary store.)
+			// P13: load RATCHET_* env vars into the guard for free-text redaction.
+			// (Loaded for redaction only; the env provider is not the primary store.)
 			envProvider := secrets.NewEnvProvider("RATCHET_")
 			for _, env := range os.Environ() {
 				if strings.HasPrefix(env, "RATCHET_") {
@@ -261,25 +239,13 @@ func secretsGuardHook() plugin.WiringHook {
 				}
 			}
 
-			app.Logger().Info("secrets backend initialized", "backend", backendName)
+			app.Logger().Info("secrets guard armed (lazy-resolve engine vault module)", "vault_module", vaultModuleKey)
 
-			// Register in service registry
+			// Register in service registry (the (R) steps resolve this).
 			_ = app.RegisterService("ratchet-secret-guard", guard)
 			return nil
 		},
 	}
-}
-
-// newFileProvider creates the default FileProvider for secrets storage.
-func newFileProvider(app modular.Application) secrets.Provider {
-	secretsDir := os.Getenv("RATCHET_SECRETS_DIR")
-	if secretsDir == "" {
-		secretsDir = "data/secrets"
-	}
-	if err := os.MkdirAll(secretsDir, 0700); err != nil {
-		app.Logger().Warn("failed to create secrets dir", "error", err)
-	}
-	return secrets.NewFileProvider(secretsDir)
 }
 
 // providerRegistryHook creates a ProviderRegistry and registers it in the service registry.
@@ -299,15 +265,22 @@ func providerRegistryHook() plugin.WiringHook {
 				return nil // no DB, skip
 			}
 
-			// Get secrets provider from SecretGuard
-			var sp secrets.Provider
+			// Get secrets provider ACCESSOR from SecretGuard.
+			//
+			// We pass the guard.Provider METHOD VALUE (not the call result) because
+			// wiring hooks run in BuildFromConfig BEFORE module Start() — so the
+			// engine secrets.vault module's Provider() is nil at hook time. The
+			// guard lazy-resolves it on first use (post-Start); resolving on demand
+			// at provider-resolution time (e.g. agent_execute) triggers that
+			// lazy-resolve instead of snapshotting a permanently-nil provider.
+			var spAccessor func() secrets.Provider
 			if svc, ok := app.SvcRegistry()["ratchet-secret-guard"]; ok {
 				if guard, ok := svc.(*SecretGuard); ok {
-					sp = guard.Provider()
+					spAccessor = guard.Provider
 				}
 			}
 
-			registry := NewProviderRegistry(db, sp)
+			registry := NewProviderRegistry(db, spAccessor)
 			_ = app.RegisterService("ratchet-provider-registry", registry)
 			return nil
 		},
