@@ -107,9 +107,13 @@ func (s *HumanRequestResolveStep) Execute(ctx context.Context, pc *module.Pipeli
 }
 
 // autoStoreSecret checks if a resolved token request has a secret_name in its metadata,
-// and if so, stores the provided value in the SecretGuard.
-func (s *HumanRequestResolveStep) autoStoreSecret(ctx context.Context, guard SecretGuardService, hrm HumanRequestService, requestID, responseData string) {
-	if responseData == "" {
+// and if so, stores the provided value via the secretService composite's Provider
+// and arms the Redactor so the just-stored token is redacted on the next pass (D3).
+//
+// The composite is TRULY-OPTIONAL: absence is a nil pointer (D5/D13 — concrete,
+// not a Null default), so we nil-check Provider() rather than IsNull.
+func (s *HumanRequestResolveStep) autoStoreSecret(ctx context.Context, guard *secretService, hrm HumanRequestService, requestID, responseData string) {
+	if guard == nil || responseData == "" {
 		return
 	}
 
@@ -139,17 +143,19 @@ func (s *HumanRequestResolveStep) autoStoreSecret(ctx context.Context, guard Sec
 		return
 	}
 
-	// SecretGuard is TRULY-OPTIONAL: skip auto-store when absent.
-	if IsNull(guard) {
+	// secretService is TRULY-OPTIONAL: skip auto-store when its provider is
+	// unresolved (nil). D5 nil-check on the accessor path.
+	if sp := guard.Provider(); sp == nil {
 		return
 	}
-	if sp := guard.Provider(); sp != nil {
-		if err := sp.Set(ctx, secretName, value); err != nil {
-			fmt.Printf("ratchetplugin: failed to store secret %q: %v\n", secretName, err)
-			return
-		}
-		guard.AddKnownSecret(secretName, value)
+	if err := guard.Provider().Set(ctx, secretName, value); err != nil {
+		fmt.Printf("ratchetplugin: failed to store secret %q: %v\n", secretName, err)
+		return
 	}
+	// D3: arm the Redactor with the just-stored token so the next Redact masks
+	// it. Dropping this call would silently leak the token in the next
+	// redaction pass (the failure class the redactor exists to prevent).
+	guard.Redactor().AddValue(secretName, value)
 }
 
 // newHumanRequestResolveFactory returns a plugin.StepFactory for "step.human_request_resolve".

@@ -11,7 +11,6 @@ import (
 	"github.com/GoCodeAlone/workflow-plugin-agent/orchestrator/tools"
 	"github.com/GoCodeAlone/workflow-plugin-agent/provider"
 	"github.com/GoCodeAlone/workflow/module"
-	"github.com/GoCodeAlone/workflow/secrets"
 )
 
 // This file defines the orchestrator-scoped service interfaces that the (R)
@@ -146,45 +145,27 @@ func (a toolRegistryAdapter) SetPaginator(rp *ResponsePaginator) {
 }
 
 // ---------------------------------------------------------------------------
-// SecretGuard
+// secretService (was SecretGuard)
 // ---------------------------------------------------------------------------
 
-// SecretGuardService is the orchestrator-scoped secret redaction / provider.
+// The orchestrator-scoped secret redaction / provider service is the
+// *secretService composite (engine *secrets.Redactor + *secretsHolder),
+// registered under the kept key "ratchet-secret-guard". It is NOT an interface
+// here: it is a concrete pointer type so consumers reach the composite directly
+// (redaction delegates to the engine Redactor; provider access delegates to the
+// holder). Absence (no hook ran / app==nil) is represented by a nil pointer;
+// the two accessor consumers (step_human_request, step_webhook) nil-check
+// Provider() rather than IsNull (D5/D13).
 //
 // Consumers:
-//   - step_human_request (TRULY-OPTIONAL — autoStoreSecret helper only).
-//   - step_webhook (TRULY-OPTIONAL — signature-verification secret lookup).
-//   - step_agent_execute (TRULY-OPTIONAL — CheckAndRedact/Redact on messages).
-//
-// Phase 3 (PR5): the bespoke step_secret_manage/vault_config consumers were
-// removed; secret mutations now flow through the engine step.secret_set /
-// step.secret_fetch + workflow-plugin-infra secret-admin steps. The Provider /
-// LoadSecrets / LoadAllSecrets methods are retained for the lazy-resolve
-// redaction path and the optional consumers above.
-type SecretGuardService interface {
-	LoadSecrets(ctx context.Context, names []string) error
-	LoadAllSecrets(ctx context.Context) error
-	Redact(text string) string
-	CheckAndRedact(msg *provider.Message) bool
-	AddKnownSecret(name, value string)
-	// Provider returns the underlying secrets.Provider so consumers can
-	// Get/Set raw secret values (webhook signature-secret lookup, human-request
-	// token auto-store). Added in P2-T3: step_webhook + step_human_request both
-	// need direct secret access that the redaction-oriented methods don't cover.
-	Provider() secrets.Provider
-}
-
-// NullSecretGuard is a no-op SecretGuardService. Redact returns its input
-// unchanged; CheckAndRedact returns false (no redaction performed); the load
-// methods are no-ops.
-type NullSecretGuard struct{ nullBase }
-
-func (NullSecretGuard) LoadSecrets(_ context.Context, _ []string) error { return nil }
-func (NullSecretGuard) LoadAllSecrets(_ context.Context) error          { return nil }
-func (NullSecretGuard) Redact(text string) string                       { return text }
-func (NullSecretGuard) CheckAndRedact(_ *provider.Message) bool         { return false }
-func (NullSecretGuard) AddKnownSecret(_, _ string)                      {}
-func (NullSecretGuard) Provider() secrets.Provider                      { return nil }
+//   - step_human_request (TRULY-OPTIONAL — autoStoreSecret helper; nil-checks
+//     Provider() before Get/Set, then arms the Redactor via AddValue — D3).
+//   - step_webhook (TRULY-OPTIONAL — signature-verification secret lookup;
+//     nil-checks Provider()).
+//   - step_agent_execute (CheckAndRedact/Redact on messages; the composite is
+//     always registered for a real app so no gate is needed — D13).
+//   - TranscriptRecorder (Redact on recorded content).
+//   - providerRegistryHook (holder.Provider method value for API-key resolution).
 
 // ---------------------------------------------------------------------------
 // ApprovalManager
@@ -482,10 +463,16 @@ func (NullTranscript) Record(_ context.Context, _ TranscriptEntry) error { retur
 // application's service registry. Every service field is non-nil: an absent
 // service is represented by its Null default. Steps inspect IsNull(iface) to
 // distinguish "present" from "absent". DB is nil when "ratchet-db" is absent.
+//
+// SecretGuard is the exception: it is a concrete *secretService pointer (D14 —
+// field name KEPT to avoid consumer churn; type changed from the deleted
+// SecretGuardService iface). Absence is a nil pointer, NOT a Null default, so
+// IsNull(svcs.SecretGuard) is false even when absent — accessor consumers
+// nil-check Provider()/the pointer directly (D5/D13).
 type serviceBundle struct {
 	Blackboard   BlackboardService
 	ToolRegistry ToolRegistryService
-	SecretGuard  SecretGuardService
+	SecretGuard  *secretService
 	Approval     ApprovalService
 	HumanRequest HumanRequestService
 	SubAgent     SubAgentService
@@ -524,7 +511,6 @@ func resolveServices(app modular.Application) serviceBundle {
 		return serviceBundle{
 			Blackboard:   NullBlackboard{},
 			ToolRegistry: NullToolRegistry{},
-			SecretGuard:  NullSecretGuard{},
 			Approval:     NullApproval{},
 			HumanRequest: NullHumanRequest{},
 			SubAgent:     NullSubAgent{},
@@ -539,7 +525,6 @@ func resolveServices(app modular.Application) serviceBundle {
 	b := serviceBundle{
 		Blackboard:   NullBlackboard{},
 		ToolRegistry: NullToolRegistry{},
-		SecretGuard:  NullSecretGuard{},
 		Approval:     NullApproval{},
 		HumanRequest: NullHumanRequest{},
 		SubAgent:     NullSubAgent{},
@@ -556,7 +541,7 @@ func resolveServices(app modular.Application) serviceBundle {
 	if svc, ok := reg["ratchet-tool-registry"].(*ToolRegistry); ok && svc != nil {
 		b.ToolRegistry = toolRegistryAdapter{tr: svc}
 	}
-	if svc, ok := reg["ratchet-secret-guard"].(*SecretGuard); ok && svc != nil {
+	if svc, ok := reg["ratchet-secret-guard"].(*secretService); ok && svc != nil {
 		b.SecretGuard = svc
 	}
 	if svc, ok := reg["ratchet-approval-manager"].(*ApprovalManager); ok && svc != nil {
@@ -601,7 +586,6 @@ func (b serviceBundle) String() string {
 	}{
 		{"blackboard", b.Blackboard},
 		{"tool_registry", b.ToolRegistry},
-		{"secret_guard", b.SecretGuard},
 		{"approval", b.Approval},
 		{"human_request", b.HumanRequest},
 		{"sub_agent", b.SubAgent},
@@ -616,6 +600,11 @@ func (b serviceBundle) String() string {
 			present++
 		}
 	}
+	// SecretGuard is a concrete *secretService pointer (not a Null default), so
+	// IsNull can't detect its absence — count it via nil-check instead.
+	if b.SecretGuard != nil {
+		present++
+	}
 	db := "absent"
 	if b.DB != nil {
 		db = "present"
@@ -626,11 +615,14 @@ func (b serviceBundle) String() string {
 // Compile-time assertions that the Null defaults satisfy their interfaces,
 // that the adapters satisfy theirs, and that the concrete structs that need no
 // adapter satisfy their interfaces directly.
+//
+// secretService is omitted here: it is a concrete pointer (not an interface
+// satisfaction site) and its structural-interface satisfaction is asserted in
+// secret_service.go (executor.SecretRedactor + interface{ Provider() }).
 var (
 	// Null defaults.
 	_ BlackboardService    = NullBlackboard{}
 	_ ToolRegistryService  = NullToolRegistry{}
-	_ SecretGuardService   = NullSecretGuard{}
 	_ ApprovalService      = NullApproval{}
 	_ HumanRequestService  = NullHumanRequest{}
 	_ SubAgentService      = NullSubAgent{}
@@ -646,7 +638,6 @@ var (
 
 	// Concrete structs that satisfy their interface directly (no adapter).
 	_ BlackboardService    = (*Blackboard)(nil)
-	_ SecretGuardService   = (*SecretGuard)(nil)
 	_ ApprovalService      = (*ApprovalManager)(nil)
 	_ HumanRequestService  = (*HumanRequestManager)(nil)
 	_ SubAgentService      = (*SubAgentManager)(nil)

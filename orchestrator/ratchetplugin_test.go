@@ -276,89 +276,11 @@ func TestSecretGuard_ConcurrentAccess(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// secretsGuardHook slimming tests (Phase 3, Task 11 / D19 / P13)
+// secretsGuardHook tests were here (Phase 3). The hook was deleted in the
+// SecretGuard dismantle (secretsResolverHook replaces it); the equivalent
+// coverage — P13 env redaction, lazy-resolve, no-vault-dev — now lives in
+// secrets_resolver_hook_test.go against secretsResolverHook.
 // ---------------------------------------------------------------------------
-
-// TestSecretsGuardHook_NoVaultDevRegistration proves the slimmed hook no longer
-// spins up vault-dev or registers a "ratchet-vault-dev" service. The engine
-// secrets.vault module (declared by the host in config) owns the backend; the
-// guard lazy-resolves it.
-func TestSecretsGuardHook_NoVaultDevRegistration(t *testing.T) {
-	// Isolate from any host vault config / RATCHET_ env so the test is deterministic.
-	t.Setenv("RATCHET_SECRETS_DIR", t.TempDir())
-	app := newMockApp()
-
-	hook := secretsGuardHook()
-	if err := hook.Hook(app, nil); err != nil {
-		t.Fatalf("secretsGuardHook: %v", err)
-	}
-
-	if _, ok := app.services["ratchet-vault-dev"]; ok {
-		t.Error("slimmed hook must NOT register ratchet-vault-dev; engine secrets.vault module owns the backend")
-	}
-}
-
-// TestSecretsGuardHook_PreservesEnvVarRedaction proves the slimmed hook STILL
-// populates the guard's knownValues from RATCHET_* env vars (P13), so secrets
-// held in env vars remain redacted even though the vault provider is now lazily
-// resolved from the engine module.
-func TestSecretsGuardHook_PreservesEnvVarRedaction(t *testing.T) {
-	const envVal = "env-held-super-secret-token"
-	t.Setenv("RATCHET_API_KEY", envVal)
-	t.Setenv("RATCHET_SECRETS_DIR", t.TempDir())
-
-	app := newMockApp()
-	if err := secretsGuardHook().Hook(app, nil); err != nil {
-		t.Fatalf("secretsGuardHook: %v", err)
-	}
-
-	guardSvc, ok := app.services["ratchet-secret-guard"]
-	if !ok {
-		t.Fatal("ratchet-secret-guard service not registered")
-	}
-	guard, ok := guardSvc.(*SecretGuard)
-	if !ok {
-		t.Fatalf("ratchet-secret-guard is %T, want *SecretGuard", guardSvc)
-	}
-
-	// The env-held value must be redacted without any lazy-resolve having fired
-	// (no vault module is registered, so resolve() no-ops).
-	redacted := guard.Redact("leaked: " + envVal)
-	if strings.Contains(redacted, envVal) {
-		t.Errorf("env-held secret value leaked: %q", redacted)
-	}
-	if !strings.Contains(redacted, "[REDACTED:") {
-		t.Errorf("expected env value to be redacted, got %q", redacted)
-	}
-}
-
-// TestSecretsGuardHook_ArmsLazyVaultResolve proves the slimmed hook arms the
-// guard for lazy resolution against the engine secrets.vault module, so a
-// module registered post-hook (post-Start) is picked up on first redaction.
-func TestSecretsGuardHook_ArmsLazyVaultResolve(t *testing.T) {
-	t.Setenv("RATCHET_SECRETS_DIR", t.TempDir())
-	app := newMockApp()
-
-	if err := secretsGuardHook().Hook(app, nil); err != nil {
-		t.Fatalf("secretsGuardHook: %v", err)
-	}
-
-	guard := app.services["ratchet-secret-guard"].(*SecretGuard)
-
-	// Simulate the engine module starting AFTER the hook ran (post-Start) by
-	// registering a provider-shaped module under the default vault key now.
-	const vaultKey = "vault"
-	known := &mockSecretsProvider{secrets: map[string]string{"ENGINE_SECRET": "engine-secret-value"}}
-	app.services[vaultKey] = &fakeVaultModule{name: vaultKey, p: known}
-
-	redacted := guard.Redact("contains engine-secret-value")
-	if strings.Contains(redacted, "engine-secret-value") {
-		t.Errorf("engine-module secret value leaked after lazy resolve: %q", redacted)
-	}
-	if !strings.Contains(redacted, "[REDACTED:ENGINE_SECRET]") {
-		t.Errorf("expected lazy-resolved engine secret to be redacted, got %q", redacted)
-	}
-}
 
 // ---------------------------------------------------------------------------
 // ToolRegistry tests
@@ -545,8 +467,7 @@ func TestTranscriptRecorder_SecretRedaction(t *testing.T) {
 	initTranscriptsTable(t, db)
 
 	p := &mockSecretsProvider{secrets: map[string]string{"API_KEY": "sk-secret-val"}}
-	sg := NewSecretGuard(p, "test")
-	_ = sg.LoadAllSecrets(context.Background())
+	sg := newTestSecretService(p)
 
 	rec := NewTranscriptRecorder(db, sg)
 	ctx := context.Background()
@@ -949,7 +870,7 @@ func TestAgentExecuteStep_SimpleCompletion(t *testing.T) {
 	}
 
 	// Set up guard
-	sg := NewSecretGuard(&mockSecretsProvider{secrets: map[string]string{}}, "test")
+	sg := newTestSecretService(&mockSecretsProvider{secrets: map[string]string{}})
 
 	// Set up recorder
 	rec := NewTranscriptRecorder(db, sg)
@@ -1017,8 +938,7 @@ func TestAgentExecuteStep_SecretRedaction(t *testing.T) {
 	mp := &mockProvider{responses: []string{"Done."}}
 	providerMod := &AIProviderModule{name: "ratchet-ai", provider: mp}
 
-	sg := NewSecretGuard(&mockSecretsProvider{secrets: map[string]string{"PASS": "my-secret-pass"}}, "test")
-	_ = sg.LoadAllSecrets(context.Background())
+	sg := newTestSecretService(&mockSecretsProvider{secrets: map[string]string{"PASS": "my-secret-pass"}})
 
 	rec := NewTranscriptRecorder(db, sg)
 	app := newMockApp()
@@ -1137,8 +1057,8 @@ func TestPlugin_WiringHooks(t *testing.T) {
 	p := New()
 	hooks := p.WiringHooks()
 
-	if len(hooks) != 22 {
-		t.Fatalf("expected 22 wiring hooks, got %d", len(hooks))
+	if len(hooks) != 21 {
+		t.Fatalf("expected 21 wiring hooks, got %d", len(hooks))
 	}
 
 	expectedNames := map[string]bool{
@@ -1147,7 +1067,6 @@ func TestPlugin_WiringHooks(t *testing.T) {
 		"ratchet.mcp_server_route_registration": false,
 		"ratchet.db_init":                       false,
 		"ratchet.auth_token":                    false,
-		"ratchet.secrets_guard":                 false,
 		"ratchet.secrets_resolver":              false,
 		"ratchet.provider_registry":             false,
 		"ratchet.tool_registry":                 false,
@@ -1177,11 +1096,10 @@ func TestPlugin_WiringHooks(t *testing.T) {
 		}
 	}
 
-	// Verify priorities: db_init(100) > auth_token(90) > secrets_guard(85) > secrets_resolver(84) > provider_registry(83) > tool_registry(80) > transcript_recorder(75)
+	// Verify priorities: db_init(100) > auth_token(90) > secrets_resolver(84) > provider_registry(83) > tool_registry(80) > transcript_recorder(75)
 	expectedPriorities := map[string]int{
 		"ratchet.db_init":             100,
 		"ratchet.auth_token":          90,
-		"ratchet.secrets_guard":       85,
 		"ratchet.secrets_resolver":    84,
 		"ratchet.provider_registry":   83,
 		"ratchet.tool_registry":       80,
@@ -1277,7 +1195,7 @@ func TestAgentExecuteStep_WorkspaceInjectedIntoContext(t *testing.T) {
 	// toolCallOnceProvider emits a single tool call on turn 1, then "Done." on turn 2.
 	mp := &toolCallOnceProvider{toolName: "capture_workspace"}
 	providerMod := &AIProviderModule{name: "ratchet-ai", provider: mp}
-	sg := NewSecretGuard(&mockSecretsProvider{secrets: map[string]string{}}, "test")
+	sg := newTestSecretService(&mockSecretsProvider{secrets: map[string]string{}})
 	rec := NewTranscriptRecorder(db, sg)
 
 	tr := NewToolRegistry()

@@ -25,21 +25,21 @@ type TranscriptEntry struct {
 
 // TranscriptRecorder records agent interactions to the database.
 type TranscriptRecorder struct {
-	db    *sql.DB
-	guard *SecretGuard
+	db  *sql.DB
+	svc *secretService
 }
 
-func NewTranscriptRecorder(db *sql.DB, guard *SecretGuard) *TranscriptRecorder {
-	return &TranscriptRecorder{db: db, guard: guard}
+func NewTranscriptRecorder(db *sql.DB, svc *secretService) *TranscriptRecorder {
+	return &TranscriptRecorder{db: db, svc: svc}
 }
 
 // Record saves a transcript entry to the database.
 func (tr *TranscriptRecorder) Record(ctx context.Context, entry TranscriptEntry) error {
 	redacted := 0
 	content := entry.Content
-	if tr.guard != nil {
+	if tr.svc != nil {
 		original := content
-		content = tr.guard.Redact(content)
+		content = tr.svc.Redact(content)
 		if content != original {
 			redacted = 1
 		}

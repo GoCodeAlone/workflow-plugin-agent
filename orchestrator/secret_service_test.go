@@ -220,3 +220,18 @@ func TestSecretService_Redact_DelegatesAndArms(t *testing.T) {
 		t.Errorf("CheckAndRedact left secret value in msg.Content: %q", msg.Content)
 	}
 }
+
+// newTestSecretService builds a *secretService composite for test injection
+// (replacing the former NewSecretGuard construction). The Redactor is armed
+// from the supplied provider (mirroring what LoadFromProvider does at runtime),
+// so a known value supplied by the provider is redacted. Pass nil to get the
+// env-only path (no vault provider).
+func newTestSecretService(p secrets.Provider) *secretService {
+	redactor := secrets.NewRedactor()
+	holder := &secretsHolder{redactor: redactor}
+	svc := &secretService{redactor: redactor, holder: holder}
+	if p != nil {
+		holder.SetProvider(p) // arms the Redactor via LoadFromProvider
+	}
+	return svc
+}

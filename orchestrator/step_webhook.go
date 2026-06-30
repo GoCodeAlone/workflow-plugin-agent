@@ -128,10 +128,13 @@ func (s *WebhookProcessStep) Execute(ctx context.Context, pc *module.PipelineCon
 	}, nil
 }
 
-// resolveSecretValue retrieves a secret value from the SecretGuardService.
-// Returns "" when the guard is absent (Null) or the secret is not found.
-func resolveSecretValue(ctx context.Context, guard SecretGuardService, secretName string) string {
-	if IsNull(guard) {
+// resolveSecretValue retrieves a secret value from the secretService composite.
+// Returns "" when the composite is absent (nil) or its provider is unresolved
+// (nil) or the secret is not found. Absence is a nil pointer (D5/D13 — the
+// composite is concrete, not a Null default), so we nil-check the pointer and
+// Provider() rather than IsNull.
+func resolveSecretValue(ctx context.Context, guard *secretService, secretName string) string {
+	if guard == nil {
 		return ""
 	}
 	sp := guard.Provider()
