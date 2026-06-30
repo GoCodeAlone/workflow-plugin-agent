@@ -171,6 +171,24 @@ type legacyStepInstance struct {
 	}
 }
 
+// LegacyStepInstance is the exported form of legacyStepInstance, used by the
+// orchestrator's sdk union adapter (orchestrator/grpc_adapter.go) to wrap
+// in-process step factories (built with app=nil) behind the sdk.StepInstance
+// interface with identical Execute semantics. Exported so the bridge wraps
+// both agent and orchestrator steps with ONE single-sourced wrapper.
+type LegacyStepInstance = legacyStepInstance
+
+// NewLegacyStepInstance wraps an in-process step implementing the
+// module.PipelineStep Execute signature as an sdk.StepInstance. It is the
+// shared boundary used by AgentPlugin.CreateStep and the orchestrator union
+// adapter. Exported to keep the wrap behavior single-sourced across both
+// sides of the agent/orchestrator fold-in (ADR 0053).
+func NewLegacyStepInstance(step interface {
+	Execute(context.Context, *module.PipelineContext) (*module.StepResult, error)
+}) LegacyStepInstance {
+	return legacyStepInstance{step: step}
+}
+
 func (s legacyStepInstance) Execute(ctx context.Context, triggerData map[string]any, stepOutputs map[string]map[string]any, current map[string]any, metadata map[string]any, _ map[string]any) (*sdk.StepResult, error) {
 	result, err := s.step.Execute(ctx, &module.PipelineContext{
 		TriggerData: triggerData,
