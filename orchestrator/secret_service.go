@@ -10,11 +10,18 @@ import (
 	"github.com/GoCodeAlone/workflow/secrets"
 )
 
-// vaultProvider is the structural interface the lazy-resolver type-asserts on
-// when looking up the engine secrets.vault module in the service registry. It
-// is declared in orchestrator/secret_guard.go (the legacy SecretGuard file) and
-// reused here unchanged; it will collapse onto this file when SecretGuard is
-// removed in a follow-up shot.
+// vaultProvider exposes the Provider() accessor the lazy-resolver type-asserts
+// on when looking up the engine secrets.vault module in the service registry.
+// The engine module.SecretsVaultModule implements this shape; defining it as a
+// local interface keeps the dependency one-directional (we assert against a
+// structural interface rather than importing the concrete module type, which
+// would create an import cycle since workflow/module is a heavy dep).
+//
+// (Moved here from secret_guard.go when SecretGuard was deleted — the lazy-
+// resolver in *secretsHolder is the sole remaining user.)
+type vaultProvider interface {
+	Provider() secrets.Provider
+}
 
 // secretsHolder is the live, hot-swappable slot for the engine secrets.vault
 // module's Provider. It preserves the D19 lazy-resolve lifecycle (wiring hooks

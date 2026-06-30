@@ -119,7 +119,6 @@ func (s *AgentExecuteStep) Execute(ctx context.Context, pc *module.PipelineConte
 	// gracefully when tools/secrets/transcripts/etc. are absent.
 	svcs := resolveServices(s.app)
 	toolRegistry := svcs.ToolRegistry
-	guard := svcs.SecretGuard
 	recorder := svcs.Transcript
 	containerSvc := svcs.Container
 
@@ -351,10 +350,13 @@ func (s *AgentExecuteStep) Execute(ctx context.Context, pc *module.PipelineConte
 			}
 		}
 
-		// Redact secrets from messages before sending to LLM
-		if !IsNull(guard) {
+		// Redact secrets from messages before sending to LLM. The secretService
+		// composite is always registered for a real app (secretsResolverHook runs
+		// unconditionally), and this step returns early when s.app==nil, so
+		// svcs.SecretGuard is non-nil here — no IsNull gate needed (D13).
+		if svcs.SecretGuard != nil {
 			for i := range messages {
-				guard.CheckAndRedact(&messages[i])
+				svcs.SecretGuard.CheckAndRedact(&messages[i])
 			}
 		}
 
@@ -578,9 +580,9 @@ func (s *AgentExecuteStep) Execute(ctx context.Context, pc *module.PipelineConte
 				}
 			}
 
-			// Redact tool results
-			if !IsNull(guard) {
-				resultStr = guard.Redact(resultStr)
+			// Redact tool results (composite always present — see note above; D13).
+			if svcs.SecretGuard != nil {
+				resultStr = svcs.SecretGuard.Redact(resultStr)
 			}
 
 			messages = append(messages, provider.Message{
@@ -841,7 +843,7 @@ func (s *AgentExecuteStep) handleHumanRequestWait(ctx context.Context, toolResul
 		var msg string
 		if req.RequestType == RequestTypeToken {
 			// Do not leak secret values into the agent transcript/LLM context.
-			// Reference the secret_name from metadata so the agent can read via SecretGuard.
+			// Reference the secret_name from metadata so the agent can read it via the secret store.
 			secretRef := "the configured secret store"
 			var meta map[string]any
 			if jsonErr := json.Unmarshal([]byte(req.Metadata), &meta); jsonErr == nil {

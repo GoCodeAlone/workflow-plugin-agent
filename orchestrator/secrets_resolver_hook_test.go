@@ -10,16 +10,15 @@ import (
 	"github.com/GoCodeAlone/workflow/secrets"
 )
 
-// secrets_resolver_hook_test.go exercises the additive secretsResolverHook
-// (Task 5). It proves the hook builds a *secretService composite (engine
-// Redactor + secretsHolder), registers it under the TEMP key
-// "ratchet-secret-guard-v2", and performs P13 two-source loading (VAULT_TOKEN +
-// RATCHET_* env) into the Redactor so the values are redacted. The legacy
-// secretsGuardHook / *SecretGuard registration under the live key
-// "ratchet-secret-guard" is untouched (additive shot).
+// secrets_resolver_hook_test.go exercises secretsResolverHook. It proves the
+// hook builds a *secretService composite (engine Redactor + secretsHolder),
+// registers it under the KEPT key "ratchet-secret-guard" (D-KEEP-KEY — the
+// repo-root package-agent path resolves the service here via alias lists), and
+// performs P13 two-source loading (VAULT_TOKEN + RATCHET_* env) into the
+// Redactor so the values are redacted.
 
 // runSecretsResolverHook invokes secretsResolverHook against a fresh mockApp
-// and returns the app + the registered *secretService (looked up under the TEMP
+// and returns the app + the registered *secretService (looked up under the KEPT
 // key). t.Helper centralizes the lookup so each test asserts behavior, not
 // registration mechanics.
 func runSecretsResolverHook(t *testing.T) (*mockApp, *secretService) {
@@ -29,22 +28,22 @@ func runSecretsResolverHook(t *testing.T) (*mockApp, *secretService) {
 	if err := hook.Hook(app, nil); err != nil {
 		t.Fatalf("secretsResolverHook returned error: %v", err)
 	}
-	raw, ok := app.services["ratchet-secret-guard-v2"]
+	raw, ok := app.services["ratchet-secret-guard"]
 	if !ok {
-		t.Fatal("secretService not registered under ratchet-secret-guard-v2")
+		t.Fatal("secretService not registered under ratchet-secret-guard")
 	}
 	svc, ok := raw.(*secretService)
 	if !ok {
-		t.Fatalf("ratchet-secret-guard-v2 service = %T, want *secretService", raw)
+		t.Fatalf("ratchet-secret-guard service = %T, want *secretService", raw)
 	}
 	return app, svc
 }
 
-// TestSecretsResolverHook_RegistersCompositeUnderTempKey proves the hook
-// registers a *secretService (not *SecretGuard) under the TEMP key
-// "ratchet-secret-guard-v2", and that the composite satisfies both root-path
-// interfaces the consumers type-assert on.
-func TestSecretsResolverHook_RegistersCompositeUnderTempKey(t *testing.T) {
+// TestSecretsResolverHook_RegistersCompositeUnderKeptKey proves the hook
+// registers a *secretService (not *SecretGuard) under the KEPT key
+// "ratchet-secret-guard", and that the composite satisfies both root-path
+// interfaces the consumers type-assert on (D10/D-COMPOSITE-SERVICE).
+func TestSecretsResolverHook_RegistersCompositeUnderKeptKey(t *testing.T) {
 	_, svc := runSecretsResolverHook(t)
 
 	// Compile-time iface satisfaction is asserted in secret_service.go; this is
@@ -52,12 +51,6 @@ func TestSecretsResolverHook_RegistersCompositeUnderTempKey(t *testing.T) {
 	// satisfies both shapes.
 	var _ executor.SecretRedactor = svc
 	var _ interface{ Provider() secrets.Provider } = svc
-
-	// Legacy key MUST remain free of the composite in this additive shot (the
-	// live SecretGuard owns it until the rewire shot).
-	if _, ok := newMockApp().services["ratchet-secret-guard"]; ok {
-		t.Fatal("precondition: fresh app should not have ratchet-secret-guard")
-	}
 }
 
 // TestSecretsResolverHook_LoadsRatchetEnvForRedaction proves P13: RATCHET_* env

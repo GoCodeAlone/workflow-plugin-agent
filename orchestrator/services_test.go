@@ -7,7 +7,6 @@ import (
 	"testing"
 
 	"github.com/GoCodeAlone/workflow-plugin-agent/orchestrator/tools"
-	"github.com/GoCodeAlone/workflow-plugin-agent/provider"
 	"github.com/google/uuid"
 )
 
@@ -27,7 +26,7 @@ import (
 
 func TestIsNull_NullDefaultsReportTrue(t *testing.T) {
 	nulls := []any{
-		NullBlackboard{}, NullToolRegistry{}, NullSecretGuard{}, NullApproval{},
+		NullBlackboard{}, NullToolRegistry{}, NullApproval{},
 		NullHumanRequest{}, NullSubAgent{}, NullSkill{}, NullContainer{},
 		NullWebhook{}, NullMemoryStore{}, NullTranscript{},
 	}
@@ -53,13 +52,13 @@ func TestIsNull_ConcreteAndAdapterReportFalse(t *testing.T) {
 	concretes := []any{
 		NewBlackboard(db, nil),
 		NewToolRegistry(),
-		NewSecretGuard(&mockSecretsProvider{secrets: map[string]string{}}, "test"),
+		newTestSecretService(&mockSecretsProvider{secrets: map[string]string{}}),
 		NewApprovalManager(db),
 		NewHumanRequestManager(db),
 		NewSubAgentManager(db, 0, 0),
 		NewSkillManager(db, ""),
 		NewContainerManager(db),
-		NewWebhookManager(db, NewSecretGuard(&mockSecretsProvider{secrets: map[string]string{}}, "test")),
+		NewWebhookManager(db),
 		NewMemoryStore(db),
 		// Adapters wrap concrete structs → never Null.
 		toolRegistryAdapter{tr: NewToolRegistry()},
@@ -112,27 +111,11 @@ func TestNullToolRegistry_AllNoOp(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// NullSecretGuard
+// NullSecretGuard tests removed: NullSecretGuard was deleted in the SecretGuard
+// dismantle (the secretService composite is concrete, not a Null default;
+// absence is a nil pointer — D5/D13/D14). Redactor passthrough behavior is
+// covered by secret_service_test.go (TestSecretService_Redact_DelegatesAndArms).
 // ---------------------------------------------------------------------------
-
-func TestNullSecretGuard_RedactIsPassthrough(t *testing.T) {
-	n := NullSecretGuard{}
-	const in = "secret value xyz"
-	if out := n.Redact(in); out != in {
-		t.Errorf("NullSecretGuard.Redact = %q, want %q (passthrough)", out, in)
-	}
-	if n.CheckAndRedact(&provider.Message{Role: provider.RoleUser, Content: in}) {
-		t.Error("NullSecretGuard.CheckAndRedact = true, want false (no redaction)")
-	}
-	if err := n.LoadSecrets(context.Background(), []string{"x"}); err != nil {
-		t.Errorf("NullSecretGuard.LoadSecrets err = %v, want nil", err)
-	}
-	if err := n.LoadAllSecrets(context.Background()); err != nil {
-		t.Errorf("NullSecretGuard.LoadAllSecrets err = %v, want nil", err)
-	}
-	// AddKnownSecret must be a safe no-op (no panic, no state observable via the interface).
-	n.AddKnownSecret("k", "v")
-}
 
 // ---------------------------------------------------------------------------
 // NullApproval
@@ -381,9 +364,11 @@ func TestContainerAdapter_NotNull(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestServiceBundle_String_AllAbsent(t *testing.T) {
-	// When resolveServices hands back all Null defaults, String reports present=0.
+	// When resolveServices hands back all Null defaults (SecretGuard nil), String
+	// reports present=0. SecretGuard is a concrete *secretService pointer; its
+	// absence is the zero value (nil), not a Null default (D13/D14).
 	b := serviceBundle{
-		Blackboard: NullBlackboard{}, ToolRegistry: NullToolRegistry{}, SecretGuard: NullSecretGuard{},
+		Blackboard: NullBlackboard{}, ToolRegistry: NullToolRegistry{},
 		Approval: NullApproval{}, HumanRequest: NullHumanRequest{}, SubAgent: NullSubAgent{},
 		Skill: NullSkill{}, Container: NullContainer{}, Webhook: NullWebhook{},
 		Memory: NullMemoryStore{}, Transcript: NullTranscript{},
@@ -402,7 +387,6 @@ func TestServiceBundle_String_AllAbsent(t *testing.T) {
 var (
 	_ BlackboardService    = NullBlackboard{}
 	_ ToolRegistryService  = NullToolRegistry{}
-	_ SecretGuardService   = NullSecretGuard{}
 	_ ApprovalService      = NullApproval{}
 	_ HumanRequestService  = NullHumanRequest{}
 	_ SubAgentService      = NullSubAgent{}

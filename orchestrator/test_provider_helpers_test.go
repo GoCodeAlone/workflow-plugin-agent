@@ -94,7 +94,7 @@ func SetupE2EAgent(t *testing.T, p provider.Provider) *E2ETestEnv {
 	}
 
 	// Set up components
-	sg := NewSecretGuard(&mockSecretsProvider{secrets: map[string]string{}}, "test")
+	sg := newTestSecretService(&mockSecretsProvider{secrets: map[string]string{}})
 	rec := NewTranscriptRecorder(db, sg)
 	tr := NewToolRegistry()
 

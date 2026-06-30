@@ -46,10 +46,11 @@ type ProviderFactory func(ctx context.Context, apiKey string, cfg LLMProviderCon
 // The secrets provider is held as an ACCESSOR (func() secrets.Provider) rather
 // than a snapshot because wiring hooks run in BuildFromConfig BEFORE module
 // Start() — so the engine secrets.vault module's Provider() is nil at hook time
-// (the SecretGuard lazy-resolves it on first use, post-Start). Resolving on
-// demand at provider-resolution time (post-Start, e.g. inside agent_execute)
-// triggers that lazy-resolve instead of snapshotting a permanently-nil provider.
-// UpdateSecretsProvider hot-saps the accessor for the runtime vault-config path.
+// (the secretService composite's secretsHolder lazy-resolves it on first use,
+// post-Start). Resolving on demand at provider-resolution time (post-Start,
+// e.g. inside agent_execute) triggers that lazy-resolve instead of snapshotting
+// a permanently-nil provider. UpdateSecretsProvider hot-swaps the accessor for
+// the runtime vault-config path.
 type ProviderRegistry struct {
 	mu              sync.RWMutex
 	db              *sql.DB
@@ -61,12 +62,13 @@ type ProviderRegistry struct {
 
 // NewProviderRegistry creates a new ProviderRegistry with built-in factories registered.
 //
-// secretsProvider is a lazy accessor (typically guard.Provider) — it is invoked
-// on demand at provider-resolution time (post-Start), NOT snapshotted at wiring
-// time. This is required because the SecretGuard resolves the engine vault
-// module's Provider lazily on first use; snapshotting at wiring time would
-// capture nil (the module's Provider is populated only in Start(), which runs
-// AFTER wiring hooks). A nil accessor degrades gracefully (no secret resolution).
+// secretsProvider is a lazy accessor (typically secretService.Holder().Provider)
+// — it is invoked on demand at provider-resolution time (post-Start), NOT
+// snapshotted at wiring time. This is required because the secretsHolder
+// resolves the engine vault module's Provider lazily on first use; snapshotting
+// at wiring time would capture nil (the module's Provider is populated only in
+// Start(), which runs AFTER wiring hooks). A nil accessor degrades gracefully
+// (no secret resolution).
 func NewProviderRegistry(db *sql.DB, secretsProvider func() secrets.Provider) *ProviderRegistry {
 	if secretsProvider == nil {
 		secretsProvider = func() secrets.Provider { return nil }
@@ -248,7 +250,7 @@ func (r *ProviderRegistry) createAndCache(ctx context.Context, alias string, cfg
 		r.mu.RUnlock()
 
 		// Resolve API key from secrets — invoke the lazy accessor (post-Start)
-		// so the SecretGuard's lazy-resolve fires at provider-resolution time,
+		// so the secretsHolder's lazy-resolve fires at provider-resolution time,
 		// not the wiring-time nil snapshot.
 		var apiKey string
 		r.mu.RLock()

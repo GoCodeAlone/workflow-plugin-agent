@@ -1,13 +1,62 @@
 package orchestrator
 
 import (
+	"context"
+	"fmt"
 	"strings"
 	"sync"
 	"testing"
 
+	"github.com/GoCodeAlone/modular"
+	"github.com/GoCodeAlone/workflow-plugin-agent/executor"
 	"github.com/GoCodeAlone/workflow-plugin-agent/provider"
 	"github.com/GoCodeAlone/workflow/secrets"
 )
+
+// fakeVaultModule mimics the engine module.SecretsVaultModule shape: it is
+// registered under its config name in the service registry and exposes a
+// Provider() secrets.Provider accessor that the lazy-resolver type-asserts on.
+// (Moved here from secret_guard_lazy_test.go when SecretGuard was deleted.)
+type fakeVaultModule struct {
+	name string
+	p    secrets.Provider
+}
+
+func (f *fakeVaultModule) Provider() secrets.Provider { return f.p }
+
+// lazyStubApp is a minimal modular.Application whose SvcRegistry returns the
+// vault-module-shaped service the lazy-resolver looks up. It reuses the
+// embedded modular.Application pattern from mockApp so it satisfies the full
+// interface. (Moved here from secret_guard_lazy_test.go.)
+type lazyStubApp struct {
+	modular.Application
+	services map[string]any
+}
+
+func (a *lazyStubApp) SvcRegistry() modular.ServiceRegistry {
+	return modular.ServiceRegistry(a.services)
+}
+
+func (a *lazyStubApp) RegisterService(name string, svc any) error {
+	a.services[name] = svc
+	return nil
+}
+
+func (a *lazyStubApp) Logger() modular.Logger { return &noopLogger{} }
+
+// startableVaultModule models the engine secrets.vault module lifecycle: it is
+// registered in the service registry at init time but its Provider() is nil
+// until Start() is called (post-wiring). This lets the registry test faithfully
+// reproduce the pre-Start (nil) → post-Start (populated) transition.
+// (Moved here from secret_guard_lazy_test.go.)
+type startableVaultModule struct {
+	p secrets.Provider
+}
+
+func (m *startableVaultModule) Provider() secrets.Provider { return m.p }
+
+// Start mirrors module.Start(): populates the Provider (post-wiring).
+func (m *startableVaultModule) Start(p secrets.Provider) { m.p = p }
 
 // These tests cover the new secretsHolder + secretService composite (the
 // additive replacement for SecretGuard). They PORT the D19 lazy-resolve +
@@ -218,5 +267,144 @@ func TestSecretService_Redact_DelegatesAndArms(t *testing.T) {
 	}
 	if strings.Contains(msg.Content, "sk-secret-123") {
 		t.Errorf("CheckAndRedact left secret value in msg.Content: %q", msg.Content)
+	}
+}
+
+// newTestSecretService builds a *secretService composite for test injection
+// (replacing the former NewSecretGuard construction). The Redactor is armed
+// from the supplied provider (mirroring what LoadFromProvider does at runtime),
+// so a known value supplied by the provider is redacted. Pass nil to get the
+// env-only path (no vault provider).
+func newTestSecretService(p secrets.Provider) *secretService {
+	redactor := secrets.NewRedactor()
+	holder := &secretsHolder{redactor: redactor}
+	svc := &secretService{redactor: redactor, holder: holder}
+	if p != nil {
+		holder.SetProvider(p) // arms the Redactor via LoadFromProvider
+	}
+	return svc
+}
+
+// TestSecretService_StoreThenRedact (D3 non-regression) proves the store-then-arm
+// path preserved by the autoStoreSecret rewire: after a token is stored via
+// Provider.Set AND armed via Redactor().AddValue, a subsequent Redact masks it.
+// Dropping the AddValue call (the regression this guards) would silently leak
+// the just-stored token in the next redaction pass — the failure class the
+// redactor exists to prevent.
+func TestSecretService_StoreThenRedact(t *testing.T) {
+	// A settable vault provider whose store records the Set so Get can return it
+	// later (mirrors step_human_request.autoStoreSecret: Provider().Set then arm).
+	// mockSecretsProvider.Set returns ErrUnsupported, so we use a local mutable
+	// provider here.
+	vault := &settableSecretsProvider{secrets: map[string]string{}}
+	svc := newTestSecretService(vault)
+
+	const secretName = "FRESH_API_KEY"
+	const token = "sk-just-stored-by-human-request"
+
+	// Store the token via the provider (autoStoreSecret does Provider().Set).
+	if err := svc.Provider().Set(context.Background(), secretName, token); err != nil {
+		t.Fatalf("Provider.Set: %v", err)
+	}
+	// Arm the redactor with the just-stored token (autoStoreSecret does
+	// Redactor().AddValue after Set — D3). This is the load-bearing call.
+	svc.Redactor().AddValue(secretName, token)
+
+	// A subsequent Redact MUST mask the token. If AddValue had been dropped, the
+	// token would leak here (the silent-leak regression).
+	got := svc.Redact("leaked token: sk-just-stored-by-human-request in output")
+	if strings.Contains(got, token) {
+		t.Errorf("D3 regression: just-stored token leaked after Redact: %q", got)
+	}
+	if !strings.Contains(got, "[REDACTED:"+secretName+"]") {
+		t.Errorf("D3: expected [REDACTED:%s], got %q", secretName, got)
+	}
+}
+
+// settableSecretsProvider is a secrets.Provider whose Set mutates the map (unlike
+// mockSecretsProvider, which returns ErrUnsupported). Used by the D3 store-then-
+// redact test to exercise the autoStoreSecret Provider().Set path.
+type settableSecretsProvider struct {
+	secrets map[string]string
+}
+
+func (m *settableSecretsProvider) Name() string { return "settable" }
+func (m *settableSecretsProvider) Get(_ context.Context, name string) (string, error) {
+	v, ok := m.secrets[name]
+	if !ok {
+		return "", fmt.Errorf("secret %q not found", name)
+	}
+	return v, nil
+}
+func (m *settableSecretsProvider) Set(_ context.Context, name, value string) error {
+	m.secrets[name] = value
+	return nil
+}
+func (m *settableSecretsProvider) Delete(_ context.Context, name string) error {
+	delete(m.secrets, name)
+	return nil
+}
+func (m *settableSecretsProvider) List(_ context.Context) ([]string, error) {
+	names := make([]string, 0, len(m.secrets))
+	for k := range m.secrets {
+		names = append(names, k)
+	}
+	return names, nil
+}
+
+// TestSecretService_RootPathAliasListsResolveComposite (Task 10 / D10
+// non-regression) proves the repo-root package-agent path resolves the
+// *secretService composite under the KEPT key "ratchet-secret-guard" via BOTH
+// alias lists + type-assertions it uses. This is the runtime mirror of the
+// compile-time iface assertions in secret_service.go: a compile-assert can't
+// catch a key-typo or registration-ordering bug, so we exercise the real
+// alias-list lookup against a fake app whose SvcRegistry returns the composite
+// under the kept key.
+//
+// Root path consumers (repo-root package agent, UNCHANGED by this shot):
+//   - step_agent_execute.go:   alias list ["agent-secret-guard","ratchet-secret-guard"]
+//     -> type-assert executor.SecretRedactor
+//   - provider_registry.go:    alias list ["ratchet-secret-guard","agent-secret-guard","secret-guard"]
+//     -> type-assert interface{ Provider() secrets.Provider }
+func TestSecretService_RootPathAliasListsResolveComposite(t *testing.T) {
+	svc := newTestSecretService(&mockSecretsProvider{secrets: map[string]string{"K": "v"}})
+	// Fake app whose registry returns the composite under the KEPT key, exactly
+	// as secretsResolverHook registers it. lazyStubApp satisfies modular.Application.
+	app := &lazyStubApp{services: map[string]any{"ratchet-secret-guard": svc}}
+
+	// Path 1: repo-root step_agent_execute.go alias list -> executor.SecretRedactor.
+	var resolvedRedactor executor.SecretRedactor
+	for _, name := range []string{"agent-secret-guard", "ratchet-secret-guard"} {
+		if r, ok := app.SvcRegistry()[name].(executor.SecretRedactor); ok {
+			resolvedRedactor = r
+			break
+		}
+	}
+	if resolvedRedactor == nil {
+		t.Fatal("D10: root path 1 (executor.SecretRedactor) did not resolve the composite under ratchet-secret-guard")
+	}
+	if resolvedRedactor != svc {
+		t.Errorf("D10: root path 1 resolved %T, want the registered *secretService", resolvedRedactor)
+	}
+
+	// Path 2: repo-root provider_registry.go alias list -> interface{ Provider() secrets.Provider }.
+	var resolvedProvider interface{ Provider() secrets.Provider }
+	for _, name := range []string{"ratchet-secret-guard", "agent-secret-guard", "secret-guard"} {
+		if p, ok := app.SvcRegistry()[name].(interface{ Provider() secrets.Provider }); ok {
+			resolvedProvider = p
+			break
+		}
+	}
+	if resolvedProvider == nil {
+		t.Fatal("D10: root path 2 (Provider accessor) did not resolve the composite under ratchet-secret-guard")
+	}
+	if resolvedProvider != svc {
+		t.Errorf("D10: root path 2 resolved %T, want the registered *secretService", resolvedProvider)
+	}
+
+	// Both paths resolve the SAME composite, and the Provider accessor returns
+	// the wired provider (proving API-key resolution would work end-to-end).
+	if resolvedProvider.Provider() == nil {
+		t.Error("D10: resolved composite's Provider() is nil; want the wired mock provider")
 	}
 }

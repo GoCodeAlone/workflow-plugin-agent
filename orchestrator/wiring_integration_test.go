@@ -44,7 +44,7 @@ func injectAll(t *testing.T, app *mockApp) *sql.DB {
 	t.Helper()
 	db := openTestDB(t)
 
-	sg := NewSecretGuard(&mockSecretsProvider{secrets: map[string]string{}}, "test")
+	sg := newTestSecretService(&mockSecretsProvider{secrets: map[string]string{}})
 	tr := NewToolRegistry()
 	bb := NewBlackboard(db, nil)
 	if err := bb.Migrate(context.Background()); err != nil {
@@ -64,7 +64,7 @@ func injectAll(t *testing.T, app *mockApp) *sql.DB {
 	app.services["ratchet-sub-agent-manager"] = NewSubAgentManager(db, 0, 0)
 	app.services["ratchet-skill-manager"] = NewSkillManager(db, "")
 	app.services["ratchet-container-manager"] = NewContainerManager(db)
-	app.services["ratchet-webhook-manager"] = NewWebhookManager(db, sg)
+	app.services["ratchet-webhook-manager"] = NewWebhookManager(db)
 	app.services["ratchet-memory-store"] = ms
 	app.services["ratchet-transcript-recorder"] = rec
 
@@ -95,7 +95,6 @@ func TestResolveServices_AllInjectedReturnsRealInterfaces(t *testing.T) {
 	}{
 		{"Blackboard", b.Blackboard},
 		{"ToolRegistry", b.ToolRegistry},
-		{"SecretGuard", b.SecretGuard},
 		{"Approval", b.Approval},
 		{"HumanRequest", b.HumanRequest},
 		{"SubAgent", b.SubAgent},
@@ -109,6 +108,11 @@ func TestResolveServices_AllInjectedReturnsRealInterfaces(t *testing.T) {
 		if IsNull(c.svc) {
 			t.Errorf("resolveServices: %s is Null after injection, want real", c.name)
 		}
+	}
+	// SecretGuard is a concrete *secretService pointer (not a Null default), so
+	// IsNull can't detect it — assert non-nil directly (D14/D13).
+	if b.SecretGuard == nil {
+		t.Errorf("resolveServices: SecretGuard is nil after injection, want real")
 	}
 
 	// Concrete types surface through the interface where no adapter is used.
@@ -146,7 +150,6 @@ func TestResolveServices_EmptyAppReturnsAllNulls(t *testing.T) {
 	}{
 		{"Blackboard", b.Blackboard},
 		{"ToolRegistry", b.ToolRegistry},
-		{"SecretGuard", b.SecretGuard},
 		{"Approval", b.Approval},
 		{"HumanRequest", b.HumanRequest},
 		{"SubAgent", b.SubAgent},
@@ -160,6 +163,10 @@ func TestResolveServices_EmptyAppReturnsAllNulls(t *testing.T) {
 		if !IsNull(c.svc) {
 			t.Errorf("resolveServices(empty): %s = %T, want Null default", c.name, c.svc)
 		}
+	}
+	// SecretGuard is a concrete *secretService pointer; absence is nil (D13/D14).
+	if b.SecretGuard != nil {
+		t.Errorf("resolveServices(empty): SecretGuard = %T, want nil", b.SecretGuard)
 	}
 	if b.DB != nil {
 		t.Errorf("resolveServices(empty): DB = %T, want nil", b.DB)
@@ -507,8 +514,8 @@ func TestResolveServices_RefactoredWebhookProcessMultiDep(t *testing.T) {
 	if b.DB == nil {
 		t.Fatal("precondition: DB is nil after wiring ratchet-db")
 	}
-	if IsNull(b.SecretGuard) {
-		t.Fatal("precondition: SecretGuard is Null after injection")
+	if b.SecretGuard == nil {
+		t.Fatal("precondition: SecretGuard is nil after injection")
 	}
 
 	step := &WebhookProcessStep{name: "wh-process-test", app: app}
@@ -597,7 +604,6 @@ func TestResolveServices_AgentExecuteBundleResolution(t *testing.T) {
 	eb := resolveServices(empty)
 	for name, svc := range map[string]any{
 		"ToolRegistry": eb.ToolRegistry,
-		"SecretGuard":  eb.SecretGuard,
 		"Memory":       eb.Memory,
 		"Approval":     eb.Approval,
 		"HumanRequest": eb.HumanRequest,
@@ -609,5 +615,9 @@ func TestResolveServices_AgentExecuteBundleResolution(t *testing.T) {
 		if !IsNull(svc) {
 			t.Errorf("agent_execute dep %s = %T on empty app, want Null", name, svc)
 		}
+	}
+	// SecretGuard is a concrete *secretService pointer; absence is nil (D13/D14).
+	if eb.SecretGuard != nil {
+		t.Errorf("agent_execute dep SecretGuard = %T on empty app, want nil", eb.SecretGuard)
 	}
 }

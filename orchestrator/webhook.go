@@ -30,13 +30,12 @@ type Webhook struct {
 
 // WebhookManager manages webhook configurations and processing logic.
 type WebhookManager struct {
-	db    *sql.DB
-	guard *SecretGuard
+	db *sql.DB
 }
 
 // NewWebhookManager creates a new WebhookManager.
-func NewWebhookManager(db *sql.DB, guard *SecretGuard) *WebhookManager {
-	return &WebhookManager{db: db, guard: guard}
+func NewWebhookManager(db *sql.DB) *WebhookManager {
+	return &WebhookManager{db: db}
 }
 
 // Create inserts a new webhook into the database.

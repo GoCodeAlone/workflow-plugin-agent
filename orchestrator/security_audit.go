@@ -690,7 +690,7 @@ func (c *SecretExposureCheck) Run(ctx context.Context) []AuditFinding {
 			Severity:    SeverityHigh,
 			Title:       fmt.Sprintf("Potential secret exposure in %d transcript(s)", count),
 			Description: fmt.Sprintf("%d transcript entries contain patterns that look like credentials (API keys, tokens, passwords) and are not redacted.", count),
-			Remediation: "Enable secret redaction via the SecretGuard. Rotate any potentially exposed credentials immediately.",
+			Remediation: "Enable secret redaction (configure the secrets.vault module / RATCHET_* env). Rotate any potentially exposed credentials immediately.",
 		})
 	}
 

@@ -42,7 +42,7 @@ func New() *RatchetPlugin {
 				Description: "Ratchet autonomous agent orchestration plugin",
 				ModuleTypes: []string{"agent.provider", "ratchet.sse_hub", "ratchet.scheduler", "ratchet.mcp_client", "ratchet.mcp_server", "authz.casbin", "agent.guardrails"},
 				StepTypes:   []string{"step.agent_execute", "step.provider_test", "step.provider_models", "step.model_pull", "step.workspace_init", "step.container_control", "step.mcp_reload", "step.approval_resolve", "step.webhook_process", "step.security_audit", "step.test_interact", "step.human_request_resolve", "step.memory_extract", "step.blackboard_post", "step.blackboard_read", "step.self_improve_validate", "step.self_improve_diff", "step.self_improve_deploy", "step.lsp_diagnose"},
-				WiringHooks: []string{"agent.provider_registry", "ratchet.sse_route_registration", "ratchet.mcp_server_route_registration", "ratchet.db_init", "ratchet.auth_token", "ratchet.secrets_guard", "ratchet.provider_registry", "ratchet.tool_policy_engine", "ratchet.sub_agent_manager", "ratchet.tool_registry", "ratchet.container_manager", "ratchet.transcript_recorder", "ratchet.skill_manager", "ratchet.approval_manager", "ratchet.human_request_manager", "ratchet.webhook_manager", "ratchet.security_auditor", "ratchet.browser_manager", "ratchet.test_interaction", "ratchet.blackboard", "ratchet.mcp_tools_wiring"},
+				WiringHooks: []string{"agent.provider_registry", "ratchet.sse_route_registration", "ratchet.mcp_server_route_registration", "ratchet.db_init", "ratchet.auth_token", "ratchet.secrets_resolver", "ratchet.provider_registry", "ratchet.tool_policy_engine", "ratchet.sub_agent_manager", "ratchet.tool_registry", "ratchet.container_manager", "ratchet.transcript_recorder", "ratchet.skill_manager", "ratchet.approval_manager", "ratchet.human_request_manager", "ratchet.webhook_manager", "ratchet.security_auditor", "ratchet.browser_manager", "ratchet.test_interaction", "ratchet.blackboard", "ratchet.mcp_tools_wiring"},
 			},
 		},
 	}
@@ -116,7 +116,6 @@ func (p *RatchetPlugin) WiringHooks() []plugin.WiringHook {
 		mcpServerRouteHook(),
 		dbInitHook(),
 		authTokenHook(),
-		secretsGuardHook(),
 		secretsResolverHook(),
 		providerRegistryHook(),
 		toolPolicyEngineHook(),
@@ -181,81 +180,19 @@ func (p *RatchetPlugin) ModuleSchemas() []*schema.ModuleSchema {
 	}
 }
 
-// secretsGuardHook creates a SecretGuard and registers it in the service registry.
+// secretsResolverHook builds the secretService composite (engine
+// *secrets.Redactor + *secretsHolder) and registers it under the KEPT service
+// key "ratchet-secret-guard".
 //
-// Phase 3 (D19): the vault backend is now owned by the engine secrets.vault
-// module (declared by the host in config), NOT constructed inline here. Because
-// wiring hooks run in BuildFromConfig BEFORE module Start() — so the engine
-// module's Provider() is nil at hook time — the guard is armed to LAZILY resolve
-// the module's Provider on its first redaction call (post-Start) via
-// AttachLazyVault. The vault module service key defaults to "vault" and can be
-// overridden via the RATCHET_VAULT_MODULE env var.
+// This is the SecretGuard dismantle (plan: 2026-06-30-secretguard-dismantle-
+// shared-redactor; design v4; ADR 0057). The composite replaces the deleted
+// SecretGuard as the registered service. The key is KEPT (D-KEEP-KEY) so the
+// repo-root package-agent path — which resolves the service via alias lists and
+// type-asserts to executor.SecretRedactor / interface{ Provider() secrets.Provider }
+// — keeps working unchanged (D-COMPOSITE-SERVICE; no root-file edit). The
+// composite satisfies both ifaces (asserted in secret_service.go).
 //
-// P13 (preserved): RATCHET_* env-var secrets + a remote-vault token (when a
-// saved vault-config is present) are still loaded into the guard's knownValues
-// for free-text redaction — this is orthogonal to the Provider source and must
-// not regress.
-func secretsGuardHook() plugin.WiringHook {
-	return plugin.WiringHook{
-		Name:     "ratchet.secrets_guard",
-		Priority: 85,
-		Hook: func(app modular.Application, _ *config.WorkflowConfig) error {
-			// No inline provider construction: the engine secrets.vault module
-			// owns the backend. The guard resolves it lazily on first redaction.
-			guard := NewSecretGuard(nil, "")
-
-			// Arm lazy resolution against the engine secrets.vault module.
-			vaultModuleKey := os.Getenv("RATCHET_VAULT_MODULE")
-			if vaultModuleKey == "" {
-				vaultModuleKey = "vault"
-			}
-			guard.AttachLazyVault(app, vaultModuleKey)
-
-			ctx := context.Background()
-
-			// P13: register a remote-vault token for redaction if a saved config
-			// is present (the token itself must never leak into LLM output even
-			// though the engine module now owns the connection).
-			if vcfg, _ := LoadVaultConfig(vaultConfigDir()); vcfg != nil && vcfg.Token != "" {
-				guard.AddKnownSecret("VAULT_TOKEN", vcfg.Token)
-			}
-
-			// P13: load RATCHET_* env vars into the guard for free-text redaction.
-			// (Loaded for redaction only; the env provider is not the primary store.)
-			envProvider := secrets.NewEnvProvider("RATCHET_")
-			for _, env := range os.Environ() {
-				if strings.HasPrefix(env, "RATCHET_") {
-					parts := strings.SplitN(env, "=", 2)
-					name := strings.TrimPrefix(parts[0], "RATCHET_")
-					if val, err := envProvider.Get(ctx, name); err == nil && val != "" {
-						guard.AddKnownSecret(name, val)
-					}
-				}
-			}
-
-			app.Logger().Info("secrets guard armed (lazy-resolve engine vault module)", "vault_module", vaultModuleKey)
-
-			// Register in service registry (the (R) steps resolve this).
-			_ = app.RegisterService("ratchet-secret-guard", guard)
-			return nil
-		},
-	}
-}
-
-// secretsResolverHook builds the new secretService composite (engine
-// *secrets.Redactor + *secretsHolder) and registers it under the TEMPORARY key
-// "ratchet-secret-guard-v2".
-//
-// This is the additive companion to secretsGuardHook (which still registers the
-// legacy *SecretGuard under the live key "ratchet-secret-guard"). It is the
-// second shot of the SecretGuard dismantle (plan: 2026-06-30-secretguard-
-// dismantle-shared-redactor; design v4; ADR 0057): the composite is built +
-// registered here so it can be exercised in isolation, and the TEMP key keeps
-// it from colliding with the live SecretGuard registration. A follow-up shot
-// rewires consumers onto the composite and flips the key back to
-// "ratchet-secret-guard" (the kept key — D-KEEP-KEY), then deletes SecretGuard.
-//
-// P13 (two-source loading, mirrors secretsGuardHook exactly):
+// P13 (two-source loading):
 //   - VAULT_TOKEN: if a saved vault-config is present its token is registered
 //     for redaction (the token must never leak into LLM output even though the
 //     engine module owns the connection).
@@ -263,7 +200,8 @@ func secretsGuardHook() plugin.WiringHook {
 //
 // D19 (lazy-resolve) is preserved by the holder: it is constructed with the app
 // + vaultKey, and resolves the engine secrets.vault module's Provider on first
-// redaction/accessor call post-Start (wiring hooks run pre-Start).
+// redaction/accessor call post-Start (wiring hooks run pre-Start). A single
+// sync.Once makes resolve+arm atomic (D6).
 func secretsResolverHook() plugin.WiringHook {
 	return plugin.WiringHook{
 		Name:     "ratchet.secrets_resolver",
@@ -303,11 +241,10 @@ func secretsResolverHook() plugin.WiringHook {
 			app.Logger().Info("secrets resolver armed (composite; lazy-resolve engine vault module)", "vault_module", vaultModuleKey)
 
 			svc := &secretService{redactor: redactor, holder: holder}
-			// TEMP key: the composite is registered alongside (not replacing) the
-			// live SecretGuard so this shot stays additive + revertible. The key
-			// flips to "ratchet-secret-guard" in a follow-up shot once consumers
-			// are rewired onto the composite.
-			_ = app.RegisterService("ratchet-secret-guard-v2", svc)
+			// KEPT key "ratchet-secret-guard" (D-KEEP-KEY): the repo-root package-agent
+			// path resolves the service here via alias lists; renaming would silently
+			// break redaction + API-key resolution on the live root-agent path.
+			_ = app.RegisterService("ratchet-secret-guard", svc)
 			return nil
 		},
 	}
@@ -330,18 +267,18 @@ func providerRegistryHook() plugin.WiringHook {
 				return nil // no DB, skip
 			}
 
-			// Get secrets provider ACCESSOR from SecretGuard.
+			// Get secrets provider ACCESSOR from the secretService composite.
 			//
-			// We pass the guard.Provider METHOD VALUE (not the call result) because
+			// We pass the holder.Provider METHOD VALUE (not the call result) because
 			// wiring hooks run in BuildFromConfig BEFORE module Start() — so the
 			// engine secrets.vault module's Provider() is nil at hook time. The
-			// guard lazy-resolves it on first use (post-Start); resolving on demand
+			// holder lazy-resolves it on first use (post-Start); resolving on demand
 			// at provider-resolution time (e.g. agent_execute) triggers that
 			// lazy-resolve instead of snapshotting a permanently-nil provider.
 			var spAccessor func() secrets.Provider
 			if svc, ok := app.SvcRegistry()["ratchet-secret-guard"]; ok {
-				if guard, ok := svc.(*SecretGuard); ok {
-					spAccessor = guard.Provider
+				if ssvc, ok := svc.(*secretService); ok {
+					spAccessor = ssvc.Holder().Provider
 				}
 			}
 
@@ -551,13 +488,13 @@ func transcriptRecorderHook() plugin.WiringHook {
 				return nil // no DB, skip
 			}
 
-			// Get SecretGuard (optional)
-			var guard *SecretGuard
+			// Get the secretService composite (optional) for transcript redaction.
+			var ssvc *secretService
 			if svc, ok := app.SvcRegistry()["ratchet-secret-guard"]; ok {
-				guard, _ = svc.(*SecretGuard)
+				ssvc, _ = svc.(*secretService)
 			}
 
-			recorder := NewTranscriptRecorder(db, guard)
+			recorder := NewTranscriptRecorder(db, ssvc)
 			_ = app.RegisterService("ratchet-transcript-recorder", recorder)
 			return nil
 		},
@@ -640,12 +577,7 @@ func webhookManagerHook() plugin.WiringHook {
 				return nil // no DB, skip
 			}
 
-			var guard *SecretGuard
-			if svc, ok := app.SvcRegistry()["ratchet-secret-guard"]; ok {
-				guard, _ = svc.(*SecretGuard)
-			}
-
-			wm := NewWebhookManager(db, guard)
+			wm := NewWebhookManager(db)
 			_ = app.RegisterService("ratchet-webhook-manager", wm)
 			return nil
 		},
