@@ -729,8 +729,13 @@ func findSSEHub(app modular.Application) *SSEHub {
 }
 
 // findGuardrailsModule searches the service registry for a GuardrailsModule instance.
-// Returns nil if no guardrails module is registered.
+// Returns nil if no guardrails module is registered, or if app is nil (the gRPC
+// legacy-bridge path constructs steps with app=nil — see stateless_nilapp_test.go
+// and the transitive-call audit header).
 func findGuardrailsModule(app modular.Application) *GuardrailsModule {
+	if app == nil {
+		return nil
+	}
 	for _, svc := range app.SvcRegistry() {
 		if gm, ok := svc.(*GuardrailsModule); ok {
 			return gm

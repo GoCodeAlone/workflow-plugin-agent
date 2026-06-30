@@ -506,6 +506,30 @@ type serviceBundle struct {
 // Execute, replacing the scattered app.SvcRegistry()["..."].(*ConcreteType)
 // casts.
 func resolveServices(app modular.Application) serviceBundle {
+	// app==nil early return: the gRPC legacy-bridge path constructs steps with
+	// app=nil (typed_contracts.go AgentPlugin.CreateStep -> factory(name,
+	// config, nil)). The real-app path below dereferences app.SvcRegistry()
+	// (the next statement), which would panic. Instead return the same
+	// all-Null bundle the function builds for an empty registry: every
+	// required-stateful caller checks IsNull(svc) and degrades gracefully, and
+	// every truly-optional caller already tolerates the Null default. See
+	// stateless_nilapp_test.go (transitive-call audit) — step_self_improve_diff
+	// reaches this path transitively via postToBlackboard.
+	if app == nil {
+		return serviceBundle{
+			Blackboard:   NullBlackboard{},
+			ToolRegistry: NullToolRegistry{},
+			SecretGuard:  NullSecretGuard{},
+			Approval:     NullApproval{},
+			HumanRequest: NullHumanRequest{},
+			SubAgent:     NullSubAgent{},
+			Skill:        NullSkill{},
+			Container:    NullContainer{},
+			Webhook:      NullWebhook{},
+			Memory:       NullMemoryStore{},
+			Transcript:   NullTranscript{},
+		}
+	}
 	reg := app.SvcRegistry()
 	b := serviceBundle{
 		Blackboard:   NullBlackboard{},
