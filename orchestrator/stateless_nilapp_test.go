@@ -173,6 +173,14 @@ func TestStatelessNilApp(t *testing.T) {
 		if !hasChanges {
 			t.Errorf("expected has_changes=true, got false; output=%v", result.Output)
 		}
+		// postToBlackboard ran (output_to_blackboard=true + hasChanges) against a
+		// null-bundle Blackboard -> it records a non-fatal blackboard_warning.
+		// Asserting its presence proves the transitive resolveServices(nil) path
+		// executed — a regression guard: deleting the postToBlackboard branch
+		// would drop this key and fail the test.
+		if _, ok := result.Output["blackboard_warning"]; !ok {
+			t.Errorf("expected blackboard_warning (proof postToBlackboard ran the transitive resolveServices(nil) path), got output=%v", result.Output)
+		}
 	})
 }
 
