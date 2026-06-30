@@ -1,0 +1,97 @@
+syntax = "proto3";
+
+package workflow.plugins.orchestrator.v1;
+
+option go_package = "github.com/GoCodeAlone/workflow-plugin-agent/internal/contracts;contracts";
+
+// LspDiagnose is the contract surface for step.lsp_diagnose. It wraps an
+// in-process LSP provider (host-injected) and emits YAML diagnostics. When no
+// LSP provider is wired the step returns an empty diagnostics list + a warning.
+// Mirrors orchestrator.LSPDiagnoseStep (orchestrator/step_lsp_diagnose.go).
+
+message LspDiagnoseConfig {
+  // content_key overrides the pc.Current key read for YAML content
+  // (default: "yaml"; the step also falls back to "content").
+  string content_key = 1;
+}
+
+message LspDiagnoseInput {
+  // yaml is the primary YAML content to diagnose.
+  string yaml = 1;
+  // content is the fallback YAML content key.
+  string content = 2;
+}
+
+message LspDiagnostic {
+  string severity = 1; // "error", "warning", "info"
+  string message = 2;
+  string range = 3;
+}
+
+message LspDiagnoseOutput {
+  repeated LspDiagnostic diagnostics = 1;
+  int32 count = 2;
+  bool has_errors = 3;
+  // warning is set when YAML is empty or the LSP provider is unavailable
+  // (graceful-degradation path; not an error).
+  string warning = 100;
+}
+
+// SelfImproveValidate is the contract surface for step.self_improve_validate.
+// Runs YAML-parse, immutability (guardrails), LSP, and MCP wfctl validation on
+// a proposed workflow config. Mirrors orchestrator.SelfImproveValidateStep
+// (orchestrator/step_self_improve_validate.go).
+
+message SelfImproveValidateConfig {
+  // proposed_key overrides the pc.Current key holding the proposed YAML
+  // (default: "proposed_yaml").
+  string proposed_key = 1;
+  // current_key overrides the pc.Current key holding the current YAML
+  // (default: "current_yaml").
+  string current_key = 2;
+  // proposed_yaml_file, when set, reads proposed YAML from this path instead of
+  // proposed_key.
+  string proposed_yaml_file = 3;
+}
+
+message SelfImproveValidateInput {
+  string proposed_yaml = 1;
+  string current_yaml = 2;
+}
+
+message SelfImproveValidateOutput {
+  bool valid = 1;
+  repeated string errors = 2;
+  repeated string warnings = 3;
+}
+
+// SelfImproveDiff is the contract surface for step.self_improve_diff. Generates
+// a unified-style text diff between current and proposed configs, optionally
+// posting the result to the Blackboard. Mirrors orchestrator.SelfImproveDiffStep
+// (orchestrator/step_self_improve_diff.go).
+
+message SelfImproveDiffConfig {
+  string proposed_key = 1;          // default: "proposed_yaml"
+  string current_key = 2;           // default: "current_yaml"
+  string proposed_yaml_file = 3;
+  string current_yaml_file = 4;
+  bool force = 5;                   // emit diff even when content is identical
+  bool include_iac = 6;             // surface iac_relevant in output
+  bool output_to_blackboard = 7;    // post diff artifact to the Blackboard
+}
+
+message SelfImproveDiffInput {
+  string proposed_yaml = 1;
+  string current_yaml = 2;
+}
+
+message SelfImproveDiffOutput {
+  string diff = 1;
+  bool has_changes = 2;
+  int32 lines_added = 3;
+  int32 lines_removed = 4;
+  bool iac_relevant = 5;
+  // blackboard_warning is set when a Blackboard post is attempted but the
+  // service is unavailable (non-fatal; the diff is still returned).
+  string blackboard_warning = 100;
+}

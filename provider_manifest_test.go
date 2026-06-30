@@ -5,8 +5,10 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"sort"
 	"testing"
 
+	pb "github.com/GoCodeAlone/workflow/plugin/external/proto"
 	sdk "github.com/GoCodeAlone/workflow/plugin/external/sdk"
 )
 
@@ -120,36 +122,60 @@ func TestAgentPluginProviderManifestRuntimeTruth(t *testing.T) {
 	}
 }
 
-// TestPluginJSONStepTypesMatchRuntimeTruth is the P6 drift gate: plugin.json
-// capabilities.stepTypes MUST equal the runtime StepTypes() list. The previous
-// plugin.json declared only the 2 strict-contract-backed steps; the engine
-// treats plugin.json capabilities as the complete capability advertisement, so
-// the legacy step.agent_execute and step.provider_test MUST also be listed even
-// though they use the legacy (non-protobuf) execution path. wfctl
-// verify-capabilities compares these two sources and fails on divergence.
+// TestPluginJSONStepTypesMatchRuntimeTruth is the P6 drift gate. It enforces
+// TWO invariants that together prevent plugin.json ↔ runtime divergence:
+//
+//  1. Every runtime StepTypes() entry MUST be declared in plugin.json
+//     (runtime ⊆ declared). This catches a step the binary serves but never
+//     advertises — the engine would reject it at load.
+//  2. Every plugin.json-declared stepType MUST carry a strict contract
+//     descriptor in plugin.contracts.json (declared ⊆ descriptors). This is
+//     the strict-contracts coverage gate: the contract SURFACE must be complete
+//     even while the gRPC SERVING surface catches up.
+//
+// During the Phase 2b contracts-first transition (PR3), plugin.json advertises
+// the 7-type union (4 agent + 3 stateless orchestrator) and all 7 carry strict
+// descriptors, but runtime StepTypes() still returns only the agent's 4 — the
+// orchestrator union adapter (PR2) is wired into the gRPC binary's StepTypes()
+// in PR4. `wfctl plugin verify-capabilities` compares ONLY Name+Version (not
+// stepTypes), so this intermediate is not rejected by tooling; the full 7-step
+// runtime parity is restored in PR4 and asserted by TestStepTypesUnionServed
+// (added there). This test intentionally does NOT assert declared ⊆ runtime
+// during the transition — only runtime ⊆ declared + declared ⊆ descriptors.
 func TestPluginJSONStepTypesMatchRuntimeTruth(t *testing.T) {
 	manifest := loadPluginJSONCapabilities(t)
 	if len(manifest.Capabilities.StepTypes) == 0 {
 		t.Fatal("plugin.json capabilities.stepTypes is empty")
 	}
 
-	runtime := map[string]bool{}
+	runtimeSet := map[string]bool{}
 	for _, s := range New().StepTypes() {
-		runtime[s] = true
+		runtimeSet[s] = true
 	}
 	declared := map[string]bool{}
 	for _, s := range manifest.Capabilities.StepTypes {
 		declared[s] = true
 	}
 
-	for s := range runtime {
+	// Invariant 1: every served step MUST be advertised (runtime ⊆ declared).
+	for s := range runtimeSet {
 		if !declared[s] {
 			t.Fatalf("plugin.json stepTypes missing runtime step %q (drift: plugin.json must list every StepTypes() entry)", s)
 		}
 	}
+
+	// Invariant 2: every advertised stepType MUST have a strict contract
+	// descriptor (declared ⊆ descriptors) — the strict-contracts coverage gate.
+	registry := New().ContractRegistry()
+	descriptorByStep := map[string]bool{}
+	for _, d := range registry.Contracts {
+		if d.Kind == pb.ContractKind_CONTRACT_KIND_STEP {
+			descriptorByStep[d.StepType] = true
+		}
+	}
 	for s := range declared {
-		if !runtime[s] {
-			t.Fatalf("plugin.json stepTypes declares %q but runtime StepTypes() does not return it", s)
+		if !descriptorByStep[s] {
+			t.Fatalf("plugin.json stepTypes declares %q but no strict contract descriptor exists in plugin.contracts.json (strict-contracts coverage gate)", s)
 		}
 	}
 
@@ -163,6 +189,36 @@ func TestPluginJSONStepTypesMatchRuntimeTruth(t *testing.T) {
 	for _, m := range manifest.Capabilities.ModuleTypes {
 		if !runtimeMods[m] {
 			t.Fatalf("plugin.json moduleTypes declares %q but runtime ModuleTypes() does not return it", m)
+		}
+	}
+}
+
+// TestPluginJSONDeclaresSevenStepTypeUnion pins the Phase 2b contracts-first
+// advertisement: plugin.json capabilities.stepTypes lists the 7-type union (4
+// agent + 3 stateless orchestrator) in a stable canonical order. The orchestrator
+// trio is served by the union adapter wired in PR4; the descriptors + plugin.json
+// advertisement land here (PR3) so strict-contracts coverage is complete before
+// the serving surface expands.
+func TestPluginJSONDeclaresSevenStepTypeUnion(t *testing.T) {
+	manifest := loadPluginJSONCapabilities(t)
+	got := append([]string(nil), manifest.Capabilities.StepTypes...)
+	sort.Strings(got)
+	want := []string{
+		"step.agent_execute",
+		"step.lsp_diagnose",
+		"step.model_pull",
+		"step.provider_models",
+		"step.provider_test",
+		"step.self_improve_diff",
+		"step.self_improve_validate",
+	}
+	sort.Strings(want)
+	if len(got) != len(want) {
+		t.Fatalf("plugin.json stepTypes = %v (len %d), want %v (len %d)", manifest.Capabilities.StepTypes, len(got), want, len(want))
+	}
+	for i, s := range want {
+		if got[i] != s {
+			t.Fatalf("plugin.json stepTypes = %v, want %v", manifest.Capabilities.StepTypes, want)
 		}
 	}
 }
