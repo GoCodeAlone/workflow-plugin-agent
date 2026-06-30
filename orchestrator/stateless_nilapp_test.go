@@ -11,7 +11,10 @@ package orchestrator
 // INSUFFICIENT: step_self_improve_diff has zero direct s.app derefs yet still
 // panics transitively via resolveServices.
 //
-// Audit (verified against this worktree's source; line numbers are current):
+// Audit (line numbers are the PRE-GUARD origin/master sites — i.e. the historical
+// unguarded-deref locations. The guards this task adds sit ABOVE each cited line,
+// so in the current tree the derefs are a few lines lower; the citations mark the
+// panic sites a future reader tracing "what was the bug" needs):
 //
 //	step.lsp_diagnose  (step_lsp_diagnose.go)
 //	  Execute:47  -> s.findLSPProvider() -> lookupLSPProvider(s.app)  (:103->:107)
