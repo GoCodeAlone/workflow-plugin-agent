@@ -55,10 +55,12 @@ func (s *WebhookProcessStep) Execute(ctx context.Context, pc *module.PipelineCon
 		payload = map[string]any{}
 	}
 
-	// --- 4. Look up webhook manager ---
-	wm := s.lookupWebhookManager()
-	if wm == nil {
-		return nil, fmt.Errorf("webhook_process step %q: webhook manager not available", s.name)
+	// --- 4. Resolve the service bundle ---
+	// WebhookProcessStep is REQUIRED-STATEFUL on WebhookService + DB.
+	svcs := resolveServices(s.app)
+	wm := svcs.Webhook
+	if IsNull(wm) {
+		return nil, fmt.Errorf("webhook_process step %q: %w", s.name, ErrServiceUnavailable)
 	}
 
 	// --- 5. Find matching webhooks by source ---
@@ -84,7 +86,7 @@ func (s *WebhookProcessStep) Execute(ctx context.Context, pc *module.PipelineCon
 	for _, wh := range webhooks {
 		// Signature verification
 		if wh.SecretName != "" {
-			secret := s.resolveSecret(ctx, wh.SecretName)
+			secret := resolveSecretValue(ctx, svcs.SecretGuard, wh.SecretName)
 			sig := extractSignatureHeader(source, headers)
 			timestamp := headers["X-Slack-Request-Timestamp"]
 			if !wm.VerifySignature(source, secret, rawBody, sig, timestamp) {
@@ -107,7 +109,7 @@ func (s *WebhookProcessStep) Execute(ctx context.Context, pc *module.PipelineCon
 		}
 
 		// Create task in DB
-		taskID, createErr := s.createTask(ctx, title, description, source, wh.ID)
+		taskID, createErr := createWebhookTask(ctx, svcs.DB, title, description, source, wh.ID)
 		if createErr != nil {
 			return nil, fmt.Errorf("webhook_process step %q: create task: %w", s.name, createErr)
 		}
@@ -126,37 +128,26 @@ func (s *WebhookProcessStep) Execute(ctx context.Context, pc *module.PipelineCon
 	}, nil
 }
 
-// lookupWebhookManager retrieves the WebhookManager from the service registry.
-func (s *WebhookProcessStep) lookupWebhookManager() *WebhookManager {
-	if svc, ok := s.app.SvcRegistry()["ratchet-webhook-manager"]; ok {
-		if wm, ok := svc.(*WebhookManager); ok {
-			return wm
-		}
+// resolveSecretValue retrieves a secret value from the SecretGuardService.
+// Returns "" when the guard is absent (Null) or the secret is not found.
+func resolveSecretValue(ctx context.Context, guard SecretGuardService, secretName string) string {
+	if IsNull(guard) {
+		return ""
 	}
-	return nil
-}
-
-// resolveSecret retrieves a secret value from the SecretGuard.
-func (s *WebhookProcessStep) resolveSecret(ctx context.Context, secretName string) string {
-	if svc, ok := s.app.SvcRegistry()["ratchet-secret-guard"]; ok {
-		if guard, ok := svc.(*SecretGuard); ok {
-			if val, err := guard.Provider().Get(ctx, secretName); err == nil {
-				return val
-			}
-		}
+	sp := guard.Provider()
+	if sp == nil {
+		return ""
+	}
+	if val, err := sp.Get(ctx, secretName); err == nil {
+		return val
 	}
 	return ""
 }
 
-// createTask inserts a new task record into the database.
-func (s *WebhookProcessStep) createTask(ctx context.Context, title, description, source, webhookID string) (string, error) {
-	svc, ok := s.app.SvcRegistry()["ratchet-db"]
-	if !ok {
-		return "", fmt.Errorf("database service 'ratchet-db' not found")
-	}
-	dbProvider, ok := svc.(module.DBProvider)
-	if !ok {
-		return "", fmt.Errorf("'ratchet-db' does not implement DBProvider")
+// createWebhookTask inserts a new task record into the database.
+func createWebhookTask(ctx context.Context, dbProvider module.DBProvider, title, description, source, webhookID string) (string, error) {
+	if dbProvider == nil {
+		return "", fmt.Errorf("webhook_process: %w", ErrServiceUnavailable)
 	}
 	sqlDB := dbProvider.DB()
 	if sqlDB == nil {
