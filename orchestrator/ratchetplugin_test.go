@@ -1137,8 +1137,8 @@ func TestPlugin_WiringHooks(t *testing.T) {
 	p := New()
 	hooks := p.WiringHooks()
 
-	if len(hooks) != 21 {
-		t.Fatalf("expected 21 wiring hooks, got %d", len(hooks))
+	if len(hooks) != 22 {
+		t.Fatalf("expected 22 wiring hooks, got %d", len(hooks))
 	}
 
 	expectedNames := map[string]bool{
@@ -1148,6 +1148,7 @@ func TestPlugin_WiringHooks(t *testing.T) {
 		"ratchet.db_init":                       false,
 		"ratchet.auth_token":                    false,
 		"ratchet.secrets_guard":                 false,
+		"ratchet.secrets_resolver":              false,
 		"ratchet.provider_registry":             false,
 		"ratchet.tool_registry":                 false,
 		"ratchet.container_manager":             false,
@@ -1176,11 +1177,12 @@ func TestPlugin_WiringHooks(t *testing.T) {
 		}
 	}
 
-	// Verify priorities: db_init(100) > auth_token(90) > secrets_guard(85) > provider_registry(83) > tool_registry(80) > transcript_recorder(75)
+	// Verify priorities: db_init(100) > auth_token(90) > secrets_guard(85) > secrets_resolver(84) > provider_registry(83) > tool_registry(80) > transcript_recorder(75)
 	expectedPriorities := map[string]int{
 		"ratchet.db_init":             100,
 		"ratchet.auth_token":          90,
 		"ratchet.secrets_guard":       85,
+		"ratchet.secrets_resolver":    84,
 		"ratchet.provider_registry":   83,
 		"ratchet.tool_registry":       80,
 		"ratchet.transcript_recorder": 75,
