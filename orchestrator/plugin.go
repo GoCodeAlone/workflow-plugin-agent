@@ -117,6 +117,7 @@ func (p *RatchetPlugin) WiringHooks() []plugin.WiringHook {
 		dbInitHook(),
 		authTokenHook(),
 		secretsGuardHook(),
+		secretsResolverHook(),
 		providerRegistryHook(),
 		toolPolicyEngineHook(),
 		subAgentManagerHook(),
@@ -236,6 +237,77 @@ func secretsGuardHook() plugin.WiringHook {
 
 			// Register in service registry (the (R) steps resolve this).
 			_ = app.RegisterService("ratchet-secret-guard", guard)
+			return nil
+		},
+	}
+}
+
+// secretsResolverHook builds the new secretService composite (engine
+// *secrets.Redactor + *secretsHolder) and registers it under the TEMPORARY key
+// "ratchet-secret-guard-v2".
+//
+// This is the additive companion to secretsGuardHook (which still registers the
+// legacy *SecretGuard under the live key "ratchet-secret-guard"). It is the
+// second shot of the SecretGuard dismantle (plan: 2026-06-30-secretguard-
+// dismantle-shared-redactor; design v4; ADR 0057): the composite is built +
+// registered here so it can be exercised in isolation, and the TEMP key keeps
+// it from colliding with the live SecretGuard registration. A follow-up shot
+// rewires consumers onto the composite and flips the key back to
+// "ratchet-secret-guard" (the kept key — D-KEEP-KEY), then deletes SecretGuard.
+//
+// P13 (two-source loading, mirrors secretsGuardHook exactly):
+//   - VAULT_TOKEN: if a saved vault-config is present its token is registered
+//     for redaction (the token must never leak into LLM output even though the
+//     engine module owns the connection).
+//   - RATCHET_* env vars: loaded for redaction only (not the primary store).
+//
+// D19 (lazy-resolve) is preserved by the holder: it is constructed with the app
+// + vaultKey, and resolves the engine secrets.vault module's Provider on first
+// redaction/accessor call post-Start (wiring hooks run pre-Start).
+func secretsResolverHook() plugin.WiringHook {
+	return plugin.WiringHook{
+		Name:     "ratchet.secrets_resolver",
+		Priority: 84,
+		Hook: func(app modular.Application, _ *config.WorkflowConfig) error {
+			redactor := secrets.NewRedactor()
+
+			vaultModuleKey := os.Getenv("RATCHET_VAULT_MODULE")
+			if vaultModuleKey == "" {
+				vaultModuleKey = "vault"
+			}
+			holder := &secretsHolder{app: app, vaultKey: vaultModuleKey, redactor: redactor}
+
+			ctx := context.Background()
+
+			// P13: register a remote-vault token for redaction if a saved config
+			// is present (the token itself must never leak into LLM output even
+			// though the engine module now owns the connection).
+			if vcfg, _ := LoadVaultConfig(vaultConfigDir()); vcfg != nil && vcfg.Token != "" {
+				redactor.AddValue("VAULT_TOKEN", vcfg.Token)
+			}
+
+			// P13: load RATCHET_* env vars into the redactor for free-text
+			// redaction. (Loaded for redaction only; the env provider is not the
+			// primary store.)
+			envProvider := secrets.NewEnvProvider("RATCHET_")
+			for _, env := range os.Environ() {
+				if strings.HasPrefix(env, "RATCHET_") {
+					parts := strings.SplitN(env, "=", 2)
+					name := strings.TrimPrefix(parts[0], "RATCHET_")
+					if val, err := envProvider.Get(ctx, name); err == nil && val != "" {
+						redactor.AddValue(name, val)
+					}
+				}
+			}
+
+			app.Logger().Info("secrets resolver armed (composite; lazy-resolve engine vault module)", "vault_module", vaultModuleKey)
+
+			svc := &secretService{redactor: redactor, holder: holder}
+			// TEMP key: the composite is registered alongside (not replacing) the
+			// live SecretGuard so this shot stays additive + revertible. The key
+			// flips to "ratchet-secret-guard" in a follow-up shot once consumers
+			// are rewired onto the composite.
+			_ = app.RegisterService("ratchet-secret-guard-v2", svc)
 			return nil
 		},
 	}
