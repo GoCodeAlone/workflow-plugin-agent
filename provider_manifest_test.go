@@ -133,15 +133,17 @@ func TestAgentPluginProviderManifestRuntimeTruth(t *testing.T) {
 //     the strict-contracts coverage gate: the contract SURFACE must be complete
 //     even while the gRPC SERVING surface catches up.
 //
-// During the Phase 2b contracts-first transition (PR3), plugin.json advertises
-// the 7-type union (4 agent + 3 stateless orchestrator) and all 7 carry strict
-// descriptors, but runtime StepTypes() still returns only the agent's 4 — the
-// orchestrator union adapter (PR2) is wired into the gRPC binary's StepTypes()
-// in PR4. `wfctl plugin verify-capabilities` compares ONLY Name+Version (not
-// stepTypes), so this intermediate is not rejected by tooling; the full 7-step
-// runtime parity is restored in PR4 and asserted by TestStepTypesUnionServed
-// (added there). This test intentionally does NOT assert declared ⊆ runtime
-// during the transition — only runtime ⊆ declared + declared ⊆ descriptors.
+// During the Phase 2b contracts-first transition (PR3), plugin.json advertised
+// the 7-type union while the agent package's StepTypes() still returned only 4;
+// the third invariant (declared⊆runtime) was DEFERRED. PR4 wires the union
+// adapter into the gRPC binary (cmd/workflow-plugin-agent/main.go serves
+// orchestrator.NewUnionAdapter()), so the binary now serves 7 — and the full
+// 7-vs-7 bidirectional gate is RESTORED in package orchestrator as
+// TestStepTypesUnionServed (it loads plugin.json and asserts served==declared
+// set equality). THIS test (package agent) keeps the agent-local invariants:
+// runtime⊆declared for the agent's own 4 + declared⊆descriptors for all 7. The
+// bidirectional union contract cannot live in package agent because agent (root)
+// cannot import orchestrator (import cycle: orchestrator imports agent).
 func TestPluginJSONStepTypesMatchRuntimeTruth(t *testing.T) {
 	manifest := loadPluginJSONCapabilities(t)
 	if len(manifest.Capabilities.StepTypes) == 0 {
