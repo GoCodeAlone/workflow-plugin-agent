@@ -42,22 +42,40 @@ func (c *LLMProviderConfig) settings() map[string]string {
 type ProviderFactory func(ctx context.Context, apiKey string, cfg LLMProviderConfig) (provider.Provider, error)
 
 // ProviderRegistry manages AI provider lifecycle: factory creation, caching, and DB lookup.
+//
+// The secrets provider is held as an ACCESSOR (func() secrets.Provider) rather
+// than a snapshot because wiring hooks run in BuildFromConfig BEFORE module
+// Start() — so the engine secrets.vault module's Provider() is nil at hook time
+// (the SecretGuard lazy-resolves it on first use, post-Start). Resolving on
+// demand at provider-resolution time (post-Start, e.g. inside agent_execute)
+// triggers that lazy-resolve instead of snapshotting a permanently-nil provider.
+// UpdateSecretsProvider hot-saps the accessor for the runtime vault-config path.
 type ProviderRegistry struct {
-	mu        sync.RWMutex
-	db        *sql.DB
-	secrets   secrets.Provider
-	cache     map[string]provider.Provider
-	factories map[string]ProviderFactory
-	sflight   singleflight.Group // deduplicates concurrent cold-start creation per alias
+	mu              sync.RWMutex
+	db              *sql.DB
+	secretsProvider func() secrets.Provider
+	cache           map[string]provider.Provider
+	factories       map[string]ProviderFactory
+	sflight         singleflight.Group // deduplicates concurrent cold-start creation per alias
 }
 
 // NewProviderRegistry creates a new ProviderRegistry with built-in factories registered.
-func NewProviderRegistry(db *sql.DB, secretsProvider secrets.Provider) *ProviderRegistry {
+//
+// secretsProvider is a lazy accessor (typically guard.Provider) — it is invoked
+// on demand at provider-resolution time (post-Start), NOT snapshotted at wiring
+// time. This is required because the SecretGuard resolves the engine vault
+// module's Provider lazily on first use; snapshotting at wiring time would
+// capture nil (the module's Provider is populated only in Start(), which runs
+// AFTER wiring hooks). A nil accessor degrades gracefully (no secret resolution).
+func NewProviderRegistry(db *sql.DB, secretsProvider func() secrets.Provider) *ProviderRegistry {
+	if secretsProvider == nil {
+		secretsProvider = func() secrets.Provider { return nil }
+	}
 	r := &ProviderRegistry{
-		db:        db,
-		secrets:   secretsProvider,
-		cache:     make(map[string]provider.Provider),
-		factories: make(map[string]ProviderFactory),
+		db:              db,
+		secretsProvider: secretsProvider,
+		cache:           make(map[string]provider.Provider),
+		factories:       make(map[string]ProviderFactory),
 	}
 
 	// Register built-in factories
@@ -128,9 +146,11 @@ func (r *ProviderRegistry) GetDefault(ctx context.Context) (provider.Provider, e
 }
 
 // UpdateSecretsProvider swaps the underlying secrets provider and clears the cache.
+// It overrides the lazy accessor with one returning the hot-swapped provider,
+// so the runtime vault-config path takes precedence over guard lazy-resolution.
 func (r *ProviderRegistry) UpdateSecretsProvider(p secrets.Provider) {
 	r.mu.Lock()
-	r.secrets = p
+	r.secretsProvider = func() secrets.Provider { return p }
 	r.cache = make(map[string]provider.Provider)
 	r.mu.Unlock()
 }
@@ -227,13 +247,20 @@ func (r *ProviderRegistry) createAndCache(ctx context.Context, alias string, cfg
 		}
 		r.mu.RUnlock()
 
-		// Resolve API key from secrets
+		// Resolve API key from secrets — invoke the lazy accessor (post-Start)
+		// so the SecretGuard's lazy-resolve fires at provider-resolution time,
+		// not the wiring-time nil snapshot.
 		var apiKey string
-		if cfg.SecretName != "" && r.secrets != nil {
-			var err error
-			apiKey, err = r.secrets.Get(ctx, cfg.SecretName)
-			if err != nil {
-				return nil, fmt.Errorf("provider registry: resolve secret %q: %w", cfg.SecretName, err)
+		r.mu.RLock()
+		spAccessor := r.secretsProvider
+		r.mu.RUnlock()
+		if cfg.SecretName != "" {
+			if sp := spAccessor(); sp != nil {
+				var err error
+				apiKey, err = sp.Get(ctx, cfg.SecretName)
+				if err != nil {
+					return nil, fmt.Errorf("provider registry: resolve secret %q: %w", cfg.SecretName, err)
+				}
 			}
 		}
 

@@ -265,15 +265,22 @@ func providerRegistryHook() plugin.WiringHook {
 				return nil // no DB, skip
 			}
 
-			// Get secrets provider from SecretGuard
-			var sp secrets.Provider
+			// Get secrets provider ACCESSOR from SecretGuard.
+			//
+			// We pass the guard.Provider METHOD VALUE (not the call result) because
+			// wiring hooks run in BuildFromConfig BEFORE module Start() — so the
+			// engine secrets.vault module's Provider() is nil at hook time. The
+			// guard lazy-resolves it on first use (post-Start); resolving on demand
+			// at provider-resolution time (e.g. agent_execute) triggers that
+			// lazy-resolve instead of snapshotting a permanently-nil provider.
+			var spAccessor func() secrets.Provider
 			if svc, ok := app.SvcRegistry()["ratchet-secret-guard"]; ok {
 				if guard, ok := svc.(*SecretGuard); ok {
-					sp = guard.Provider()
+					spAccessor = guard.Provider
 				}
 			}
 
-			registry := NewProviderRegistry(db, sp)
+			registry := NewProviderRegistry(db, spAccessor)
 			_ = app.RegisterService("ratchet-provider-registry", registry)
 			return nil
 		},

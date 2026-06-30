@@ -1,6 +1,7 @@
 package orchestrator
 
 import (
+	"context"
 	"strings"
 	"sync"
 	"testing"
@@ -48,7 +49,8 @@ func TestSecretGuardLazyResolve_PopulatesFromEngineModule(t *testing.T) {
 	known := &mockSecretsProvider{secrets: map[string]string{
 		"DATABASE_URL": "postgres://super-secret-db-host:5432/prod",
 	}}
-	vaultMod := &fakeVaultModule{name: vaultKey, p: known}
+	// Pre-Start: module registered but Provider() is nil; Start() populates it.
+	vaultMod := &startableVaultModule{}
 
 	app := &lazyStubApp{services: map[string]any{vaultKey: vaultMod}}
 
@@ -57,9 +59,8 @@ func TestSecretGuardLazyResolve_PopulatesFromEngineModule(t *testing.T) {
 	sg := NewSecretGuard(nil, "")
 	sg.AttachLazyVault(app, vaultKey)
 
-	if sg.Provider() != nil {
-		t.Fatalf("precondition: provider must be nil before lazy resolve, got %T", sg.Provider())
-	}
+	// module.Start() populates the engine module's Provider post-wiring.
+	vaultMod.Start(known)
 
 	// First redaction call must trigger lazy resolve -> SetProvider -> knownValues populated.
 	msg := &provider.Message{Content: "the connection string is postgres://super-secret-db-host:5432/prod please"}
@@ -167,5 +168,155 @@ func TestSecretGuardLazyResolve_ModuleNotProviderShape(t *testing.T) {
 	text := "leaked-value"
 	if got := sg.Redact(text); got != text {
 		t.Errorf("expected pass-through for non-provider module shape, got %q", got)
+	}
+}
+
+// startableVaultModule models the engine secrets.vault module lifecycle: it is
+// registered in the service registry at init time but its Provider() is nil
+// until Start() is called (post-wiring). This lets the registry test faithfully
+// reproduce the pre-Start (nil) → post-Start (populated) transition.
+type startableVaultModule struct {
+	p secrets.Provider
+}
+
+func (m *startableVaultModule) Provider() secrets.Provider { return m.p }
+
+// Start mirrors module.Start(): populates the Provider (post-wiring).
+func (m *startableVaultModule) Start(p secrets.Provider) { m.p = p }
+
+// TestProviderRegistryResolvesSecretViaLazyGuard proves the ProviderRegistry
+// resolves a vault-backed secret via the LAZY SecretGuard accessor (the method
+// value guard.Provider), NOT a nil wiring-time snapshot.
+//
+// This is the regression test for the PR4 lazy-resolve change: providerRegistryHook
+// runs at wiring time (pre-Start), where the engine secrets.vault module's
+// Provider() is nil. The registry must defer resolution to provider-resolution
+// time (post-Start) so vault-backed AI providers (those with SecretName) get
+// their real API key instead of an empty one.
+func TestProviderRegistryResolvesSecretViaLazyGuard(t *testing.T) {
+	const vaultKey = "vault"
+	known := &mockSecretsProvider{secrets: map[string]string{
+		"ANTHROPIC_API_KEY": "sk-vault-resolved-key",
+	}}
+	// Pre-Start: module registered, Provider() nil.
+	vaultMod := &startableVaultModule{}
+	app := &lazyStubApp{services: map[string]any{vaultKey: vaultMod}}
+
+	// === WIRING TIME (pre-Start) ===
+	// Construct the guard exactly as secretsGuardHook does: no pre-set provider,
+	// armed for lazy resolution against the engine module.
+	guard := NewSecretGuard(nil, "")
+	guard.AttachLazyVault(app, vaultKey)
+
+	// The registry is built with the guard.Provider METHOD VALUE (lazy accessor),
+	// exactly as providerRegistryHook now wires it. It must NOT snapshot nil here.
+	reg := NewProviderRegistry(setupTestDB(t), guard.Provider)
+
+	_, err := reg.db.Exec(`INSERT INTO llm_providers (id, alias, type, model, secret_name)
+		VALUES ('p1', 'vaulted-claude', 'anthropic', 'claude-sonnet-4-20250514', 'ANTHROPIC_API_KEY')`)
+	if err != nil {
+		t.Fatalf("insert: %v", err)
+	}
+
+	// === POST-START ===
+	// module.Start() runs after wiring hooks and populates the module's Provider.
+	vaultMod.Start(known)
+
+	// === PROVIDER-RESOLUTION TIME (post-Start, e.g. agent_execute) ===
+	// Resolve the provider. The registry invokes the lazy accessor, which triggers
+	// the guard's lazy-resolve of the now-populated engine module Provider. If the
+	// registry had snapshotted nil at wiring time, the API key would be empty and
+	// the anthropic factory would reject it ("APIKey is required").
+	p, err := reg.GetByAlias(context.Background(), "vaulted-claude")
+	if err != nil {
+		t.Fatalf("GetByAlias via lazy guard: %v", err)
+	}
+	if p == nil {
+		t.Fatal("expected non-nil provider resolved via lazy guard")
+	}
+	if p.Name() != "anthropic" {
+		t.Errorf("expected anthropic provider, got %q", p.Name())
+	}
+
+	// The guard must now have resolved the engine module's provider (lazy resolve
+	// fired during the registry's resolution), proving the accessor pathway works
+	// end-to-end rather than a nil snapshot.
+	if guard.Provider() != known {
+		t.Errorf("guard.Provider() not resolved to engine module provider after registry resolution: got %T", guard.Provider())
+	}
+}
+
+// TestProviderRegistryNilAccessorNoPanic proves the wiring-time nil-accessor path
+// (no SecretGuard registered, or guard absent) degrades gracefully: the registry
+// builds without panic and a SecretName provider resolves with an empty API key
+// (existing behavior — no secret resolution, but no panic either).
+func TestProviderRegistryNilAccessorNoPanic(t *testing.T) {
+	// NewProviderRegistry with a nil accessor must not panic; it's internally
+	// normalized to func() secrets.Provider { return nil }.
+	reg := NewProviderRegistry(setupTestDB(t), nil)
+
+	// A SecretName provider resolves with an empty key (nil accessor → sp == nil
+	// → secret resolution skipped). This mirrors the pre-fix nil-snapshot
+	// behavior for the no-vault path.
+	_, err := reg.db.Exec(`INSERT INTO llm_providers (id, alias, type, secret_name)
+		VALUES ('p1', 'no-vault', 'mock', 'SOME_SECRET')`)
+	if err != nil {
+		t.Fatalf("insert: %v", err)
+	}
+
+	p, err := reg.GetByAlias(context.Background(), "no-vault")
+	if err != nil {
+		t.Fatalf("GetByAlias with nil accessor: %v", err)
+	}
+	if p == nil {
+		t.Fatal("expected non-nil mock provider despite nil accessor")
+	}
+	if p.Name() != "mock" {
+		t.Errorf("expected mock provider, got %q", p.Name())
+	}
+}
+
+// TestProviderRegistryUpdateSecretsProviderOverridesLazy proves the runtime
+// hot-swap (UpdateSecretsProvider, used by step.vault_config) takes precedence
+// over the lazy guard accessor: after the swap, resolution uses the new provider
+// and the lazy accessor is no longer consulted.
+func TestProviderRegistryUpdateSecretsProviderOverridesLazy(t *testing.T) {
+	const vaultKey = "vault"
+	// Lazy-guard-backed provider would resolve "K" -> "lazy-val".
+	lazyProvider := &mockSecretsProvider{secrets: map[string]string{"K": "lazy-val"}}
+	vaultMod := &startableVaultModule{}
+	vaultMod.Start(lazyProvider)
+	app := &lazyStubApp{services: map[string]any{vaultKey: vaultMod}}
+
+	guard := NewSecretGuard(nil, "")
+	guard.AttachLazyVault(app, vaultKey)
+	reg := NewProviderRegistry(setupTestDB(t), guard.Provider)
+
+	// A factory that records the resolved apiKey, so we can assert WHICH provider
+	// supplied the secret (hot-swap vs lazy).
+	var resolvedKey string
+	reg.factories["recording"] = func(_ context.Context, apiKey string, _ LLMProviderConfig) (provider.Provider, error) {
+		resolvedKey = apiKey
+		return &mockProvider{responses: []string{"ok"}}, nil
+	}
+
+	_, err := reg.db.Exec(`INSERT INTO llm_providers (id, alias, type, secret_name)
+		VALUES ('p1', 'swap-test', 'recording', 'K')`)
+	if err != nil {
+		t.Fatalf("insert: %v", err)
+	}
+
+	// Hot-swap to a provider that resolves "K" -> "hotswap-val".
+	hotSwap := &mockSecretsProvider{secrets: map[string]string{"K": "hotswap-val"}}
+	reg.UpdateSecretsProvider(hotSwap)
+
+	if _, err := reg.GetByAlias(context.Background(), "swap-test"); err != nil {
+		t.Fatalf("GetByAlias after hot-swap: %v", err)
+	}
+
+	// The registry must have resolved the secret from the HOT-SWAP provider,
+	// proving it took precedence over the lazy guard accessor.
+	if resolvedKey != "hotswap-val" {
+		t.Errorf("hot-swap did not take precedence: resolved key %q, want %q", resolvedKey, "hotswap-val")
 	}
 }
