@@ -51,7 +51,10 @@
       "step.agent_execute",
       "step.provider_test",
       "step.provider_models",
-      "step.model_pull"
+      "step.model_pull",
+      "step.lsp_diagnose",
+      "step.self_improve_validate",
+      "step.self_improve_diff"
     ],
     "triggerTypes": []
   },

@@ -38,6 +38,30 @@
       "config": "workflow.plugins.agent.v1.ModelPullConfig",
       "input": "workflow.plugins.agent.v1.ModelPullInput",
       "output": "workflow.plugins.agent.v1.ModelPullOutput"
+    },
+    {
+      "kind": "step",
+      "type": "step.lsp_diagnose",
+      "mode": "strict",
+      "config": "workflow.plugins.orchestrator.v1.LspDiagnoseConfig",
+      "input": "workflow.plugins.orchestrator.v1.LspDiagnoseInput",
+      "output": "workflow.plugins.orchestrator.v1.LspDiagnoseOutput"
+    },
+    {
+      "kind": "step",
+      "type": "step.self_improve_validate",
+      "mode": "strict",
+      "config": "workflow.plugins.orchestrator.v1.SelfImproveValidateConfig",
+      "input": "workflow.plugins.orchestrator.v1.SelfImproveValidateInput",
+      "output": "workflow.plugins.orchestrator.v1.SelfImproveValidateOutput"
+    },
+    {
+      "kind": "step",
+      "type": "step.self_improve_diff",
+      "mode": "strict",
+      "config": "workflow.plugins.orchestrator.v1.SelfImproveDiffConfig",
+      "input": "workflow.plugins.orchestrator.v1.SelfImproveDiffInput",
+      "output": "workflow.plugins.orchestrator.v1.SelfImproveDiffOutput"
     }
   ]
 }

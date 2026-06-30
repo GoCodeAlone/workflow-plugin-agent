@@ -18,11 +18,20 @@ import (
 
 const agentContractsPackage = "workflow.plugins.agent.v1."
 
+// orchestratorContractsPackage is the proto package for the 3 stateless
+// orchestrator step types (step.lsp_diagnose, step.self_improve_validate,
+// step.self_improve_diff). They are semantically distinct from the agent's AI
+// primitives and live in their own proto file (internal/contracts/orchestrator.proto)
+// so consumers can resolve config/input/output shapes for the orchestrator
+// subset without coupling to agent.v1.
+const orchestratorContractsPackage = "workflow.plugins.orchestrator.v1."
+
 // ContractRegistry returns protobuf descriptors and strict contract bindings.
 func (p *AgentPlugin) ContractRegistry() *pb.ContractRegistry {
 	return &pb.ContractRegistry{
 		FileDescriptorSet: &descriptorpb.FileDescriptorSet{File: []*descriptorpb.FileDescriptorProto{
 			protodesc.ToFileDescriptorProto(contracts.File_internal_contracts_agent_proto),
+			protodesc.ToFileDescriptorProto(contracts.File_internal_contracts_orchestrator_proto),
 		}},
 		Contracts: []*pb.ContractDescriptor{
 			{
@@ -44,6 +53,18 @@ func (p *AgentPlugin) ContractRegistry() *pb.ContractRegistry {
 			stepContract("step.provider_test", "ProviderTestConfig", "ProviderTestInput", "ProviderTestOutput"),
 			stepContract("step.provider_models", "ProviderModelsConfig", "ProviderModelsInput", "ProviderModelsOutput"),
 			stepContract("step.model_pull", "ModelPullConfig", "ModelPullInput", "ModelPullOutput"),
+			// The 3 stateless orchestrator steps carry strict contract
+			// DESCRIPTORS so the strict-contracts coverage gate passes and
+			// consumers can validate config for step.lsp_diagnose /
+			// step.self_improve_validate / step.self_improve_diff. They are
+			// served via the orchestrator union adapter (orchestrator/grpc_adapter.go,
+			// PR2) which delegates to the in-process orchestrator step factories
+			// behind the sdk.StepInstance boundary. Like the app-bound agent
+			// pair above, the descriptors describe the contract SURFACE; the
+			// gRPC execution path is wired in PR4 (cmd/workflow-plugin-agent/main.go).
+			orchestratorStepContract("step.lsp_diagnose", "LspDiagnoseConfig", "LspDiagnoseInput", "LspDiagnoseOutput"),
+			orchestratorStepContract("step.self_improve_validate", "SelfImproveValidateConfig", "SelfImproveValidateInput", "SelfImproveValidateOutput"),
+			orchestratorStepContract("step.self_improve_diff", "SelfImproveDiffConfig", "SelfImproveDiffInput", "SelfImproveDiffOutput"),
 		},
 	}
 }
@@ -139,6 +160,20 @@ func stepContract(stepType, configMessage, inputMessage, outputMessage string) *
 		ConfigMessage: agentContractsPackage + configMessage,
 		InputMessage:  agentContractsPackage + inputMessage,
 		OutputMessage: agentContractsPackage + outputMessage,
+		Mode:          pb.ContractMode_CONTRACT_MODE_STRICT_PROTO,
+	}
+}
+
+// orchestratorStepContract is the orchestrator.v1 analogue of stepContract:
+// identical shape, but the proto messages live under
+// workflow.plugins.orchestrator.v1 (internal/contracts/orchestrator.proto).
+func orchestratorStepContract(stepType, configMessage, inputMessage, outputMessage string) *pb.ContractDescriptor {
+	return &pb.ContractDescriptor{
+		Kind:          pb.ContractKind_CONTRACT_KIND_STEP,
+		StepType:      stepType,
+		ConfigMessage: orchestratorContractsPackage + configMessage,
+		InputMessage:  orchestratorContractsPackage + inputMessage,
+		OutputMessage: orchestratorContractsPackage + outputMessage,
 		Mode:          pb.ContractMode_CONTRACT_MODE_STRICT_PROTO,
 	}
 }
