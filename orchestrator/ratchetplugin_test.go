@@ -276,6 +276,91 @@ func TestSecretGuard_ConcurrentAccess(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
+// secretsGuardHook slimming tests (Phase 3, Task 11 / D19 / P13)
+// ---------------------------------------------------------------------------
+
+// TestSecretsGuardHook_NoVaultDevRegistration proves the slimmed hook no longer
+// spins up vault-dev or registers a "ratchet-vault-dev" service. The engine
+// secrets.vault module (declared by the host in config) owns the backend; the
+// guard lazy-resolves it.
+func TestSecretsGuardHook_NoVaultDevRegistration(t *testing.T) {
+	// Isolate from any host vault config / RATCHET_ env so the test is deterministic.
+	t.Setenv("RATCHET_SECRETS_DIR", t.TempDir())
+	app := newMockApp()
+
+	hook := secretsGuardHook()
+	if err := hook.Hook(app, nil); err != nil {
+		t.Fatalf("secretsGuardHook: %v", err)
+	}
+
+	if _, ok := app.services["ratchet-vault-dev"]; ok {
+		t.Error("slimmed hook must NOT register ratchet-vault-dev; engine secrets.vault module owns the backend")
+	}
+}
+
+// TestSecretsGuardHook_PreservesEnvVarRedaction proves the slimmed hook STILL
+// populates the guard's knownValues from RATCHET_* env vars (P13), so secrets
+// held in env vars remain redacted even though the vault provider is now lazily
+// resolved from the engine module.
+func TestSecretsGuardHook_PreservesEnvVarRedaction(t *testing.T) {
+	const envVal = "env-held-super-secret-token"
+	t.Setenv("RATCHET_API_KEY", envVal)
+	t.Setenv("RATCHET_SECRETS_DIR", t.TempDir())
+
+	app := newMockApp()
+	if err := secretsGuardHook().Hook(app, nil); err != nil {
+		t.Fatalf("secretsGuardHook: %v", err)
+	}
+
+	guardSvc, ok := app.services["ratchet-secret-guard"]
+	if !ok {
+		t.Fatal("ratchet-secret-guard service not registered")
+	}
+	guard, ok := guardSvc.(*SecretGuard)
+	if !ok {
+		t.Fatalf("ratchet-secret-guard is %T, want *SecretGuard", guardSvc)
+	}
+
+	// The env-held value must be redacted without any lazy-resolve having fired
+	// (no vault module is registered, so resolve() no-ops).
+	redacted := guard.Redact("leaked: " + envVal)
+	if strings.Contains(redacted, envVal) {
+		t.Errorf("env-held secret value leaked: %q", redacted)
+	}
+	if !strings.Contains(redacted, "[REDACTED:") {
+		t.Errorf("expected env value to be redacted, got %q", redacted)
+	}
+}
+
+// TestSecretsGuardHook_ArmsLazyVaultResolve proves the slimmed hook arms the
+// guard for lazy resolution against the engine secrets.vault module, so a
+// module registered post-hook (post-Start) is picked up on first redaction.
+func TestSecretsGuardHook_ArmsLazyVaultResolve(t *testing.T) {
+	t.Setenv("RATCHET_SECRETS_DIR", t.TempDir())
+	app := newMockApp()
+
+	if err := secretsGuardHook().Hook(app, nil); err != nil {
+		t.Fatalf("secretsGuardHook: %v", err)
+	}
+
+	guard := app.services["ratchet-secret-guard"].(*SecretGuard)
+
+	// Simulate the engine module starting AFTER the hook ran (post-Start) by
+	// registering a provider-shaped module under the default vault key now.
+	const vaultKey = "vault"
+	known := &mockSecretsProvider{secrets: map[string]string{"ENGINE_SECRET": "engine-secret-value"}}
+	app.services[vaultKey] = &fakeVaultModule{name: vaultKey, p: known}
+
+	redacted := guard.Redact("contains engine-secret-value")
+	if strings.Contains(redacted, "engine-secret-value") {
+		t.Errorf("engine-module secret value leaked after lazy resolve: %q", redacted)
+	}
+	if !strings.Contains(redacted, "[REDACTED:ENGINE_SECRET]") {
+		t.Errorf("expected lazy-resolved engine secret to be redacted, got %q", redacted)
+	}
+}
+
+// ---------------------------------------------------------------------------
 // ToolRegistry tests
 // ---------------------------------------------------------------------------
 
