@@ -91,6 +91,19 @@ func DeleteVaultConfig(dir string) error {
 	return err
 }
 
+// vaultConfigDir returns the directory used for vault config storage. The
+// directory also backs the at-rest encryption keyfile (see deriveKey). The
+// secretsGuardHook (P13) reads a saved remote-vault token from here so the
+// token is added to the guard's redaction set before the engine vault module
+// owns the live connection.
+func vaultConfigDir() string {
+	dir := os.Getenv("RATCHET_DATA_DIR")
+	if dir == "" {
+		dir = "data"
+	}
+	return dir
+}
+
 // deriveKey derives a 32-byte AES key from the config directory path and a
 // machine-local keyfile. The keyfile is created on first use and stored at
 // dir/.vault-key with 0600 permissions. This ensures the token can only be

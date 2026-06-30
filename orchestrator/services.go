@@ -152,10 +152,15 @@ func (a toolRegistryAdapter) SetPaginator(rp *ResponsePaginator) {
 // SecretGuardService is the orchestrator-scoped secret redaction / provider.
 //
 // Consumers:
-//   - step_secret_manage (REQUIRED-STATEFUL — Provider/LoadSecrets/LoadAllSecrets).
 //   - step_human_request (TRULY-OPTIONAL — autoStoreSecret helper only).
 //   - step_webhook (TRULY-OPTIONAL — signature-verification secret lookup).
 //   - step_agent_execute (TRULY-OPTIONAL — CheckAndRedact/Redact on messages).
+//
+// Phase 3 (PR5): the bespoke step_secret_manage/vault_config consumers were
+// removed; secret mutations now flow through the engine step.secret_set /
+// step.secret_fetch + workflow-plugin-infra secret-admin steps. The Provider /
+// LoadSecrets / LoadAllSecrets methods are retained for the lazy-resolve
+// redaction path and the optional consumers above.
 type SecretGuardService interface {
 	LoadSecrets(ctx context.Context, names []string) error
 	LoadAllSecrets(ctx context.Context) error

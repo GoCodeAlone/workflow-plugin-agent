@@ -277,7 +277,7 @@ func TestProviderRegistryNilAccessorNoPanic(t *testing.T) {
 }
 
 // TestProviderRegistryUpdateSecretsProviderOverridesLazy proves the runtime
-// hot-swap (UpdateSecretsProvider, used by step.vault_config) takes precedence
+// hot-swap (UpdateSecretsProvider on the ProviderRegistry) takes precedence
 // over the lazy guard accessor: after the swap, resolution uses the new provider
 // and the lazy accessor is no longer consulted.
 func TestProviderRegistryUpdateSecretsProviderOverridesLazy(t *testing.T) {

@@ -212,7 +212,7 @@ func (c *ProviderSecurityCheck) Run(ctx context.Context) []AuditFinding {
 				Severity:    SeverityHigh,
 				Title:       fmt.Sprintf("Provider %q has no secret configured", alias),
 				Description: fmt.Sprintf("AI provider %q (type: %s) does not reference a vault secret for its API key.", alias, provType),
-				Remediation: "Configure the provider's API key via the vault using step.secret_manage.",
+				Remediation: "Configure the provider's API key via the vault using step.secret_set.",
 			})
 		}
 	}
@@ -235,7 +235,7 @@ func (c *ProviderSecurityCheck) Run(ctx context.Context) []AuditFinding {
 					Severity:    SeverityMedium,
 					Title:       fmt.Sprintf("Sensitive credential in environment variable %q", key),
 					Description: "Credentials should be stored in the vault, not in environment variables.",
-					Remediation: "Move this credential to the vault using step.secret_manage and remove the env var.",
+					Remediation: "Move this credential to the vault using step.secret_set and remove the env var.",
 				})
 				break
 			}
@@ -329,7 +329,7 @@ func (c *VaultCheck) Run(_ context.Context) []AuditFinding {
 			Severity:    SeverityCritical,
 			Title:       "Vault-dev backend in use in production",
 			Description: "The development vault backend is not suitable for production use. It stores secrets in memory and is not persistent.",
-			Remediation: "Configure a remote HashiCorp Vault instance using step.vault_config with action: configure.",
+			Remediation: "Configure a remote HashiCorp Vault instance by declaring the engine secrets.vault module in config (and verify with step.secret_vault_status).",
 		})
 	} else if hasVaultDev {
 		findings = append(findings, AuditFinding{
