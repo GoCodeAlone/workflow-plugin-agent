@@ -14,11 +14,14 @@ import (
 	"time"
 
 	"github.com/GoCodeAlone/workflow-plugin-agent/executor"
+	"github.com/docker/docker/api/types"
 	"github.com/docker/docker/api/types/container"
 	"github.com/docker/docker/api/types/image"
 	"github.com/docker/docker/api/types/mount"
+	"github.com/docker/docker/api/types/network"
 	"github.com/docker/docker/client"
 	"github.com/docker/docker/pkg/stdcopy"
+	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
 )
 
 // MountSpec describes a single bind mount.
@@ -43,11 +46,26 @@ type WorkspaceSpec struct {
 // It maintains a cache of projectID -> containerID mappings and persists
 // state to the workspace_containers table.
 type ContainerManager struct {
-	mu         sync.Mutex
-	client     client.APIClient
-	db         *sql.DB
-	available  bool
-	containers map[string]string // projectID -> containerID
+	mu             sync.Mutex
+	client         dockerAPIClient
+	db             *sql.DB
+	available      bool
+	containers     map[string]string // projectID -> containerID
+	ensureInFlight map[string]chan struct{}
+}
+
+type dockerAPIClient interface {
+	ContainerCreate(context.Context, *container.Config, *container.HostConfig, *network.NetworkingConfig, *ocispec.Platform, string) (container.CreateResponse, error)
+	ContainerExecAttach(context.Context, string, container.ExecAttachOptions) (types.HijackedResponse, error)
+	ContainerExecCreate(context.Context, string, container.ExecOptions) (container.ExecCreateResponse, error)
+	ContainerExecInspect(context.Context, string) (container.ExecInspect, error)
+	ContainerInspect(context.Context, string) (container.InspectResponse, error)
+	ContainerRemove(context.Context, string, container.RemoveOptions) error
+	ContainerStart(context.Context, string, container.StartOptions) error
+	ContainerStop(context.Context, string, container.StopOptions) error
+	ImageInspect(context.Context, string, ...client.ImageInspectOption) (image.InspectResponse, error)
+	ImagePull(context.Context, string, image.PullOptions) (io.ReadCloser, error)
+	Close() error
 }
 
 // NewContainerManager creates a ContainerManager. It attempts to connect to
@@ -55,8 +73,9 @@ type ContainerManager struct {
 // and all operations gracefully fall back.
 func NewContainerManager(db *sql.DB) *ContainerManager {
 	cm := &ContainerManager{
-		db:         db,
-		containers: make(map[string]string),
+		db:             db,
+		containers:     make(map[string]string),
+		ensureInFlight: make(map[string]chan struct{}),
 	}
 
 	cli, err := client.NewClientWithOpts(client.FromEnv, client.WithAPIVersionNegotiation())
@@ -124,18 +143,28 @@ func (cm *ContainerManager) EnsureContainer(ctx context.Context, projectID, work
 		return "", fmt.Errorf("container manager: image is required")
 	}
 
-	cm.mu.Lock()
-	defer cm.mu.Unlock()
+	done, err := cm.beginEnsure(ctx, projectID)
+	if err != nil {
+		return "", fmt.Errorf("container manager: wait for project ensure: %w", err)
+	}
+	defer done()
 
 	// Check cache first
-	if cid, ok := cm.containers[projectID]; ok {
+	cm.mu.Lock()
+	cid, ok := cm.containers[projectID]
+	cm.mu.Unlock()
+	if ok {
 		// Verify container is still running
 		info, err := cm.client.ContainerInspect(ctx, cid)
 		if err == nil && info.State.Running {
 			return cid, nil
 		}
 		// Container gone or stopped — remove from cache
-		delete(cm.containers, projectID)
+		cm.mu.Lock()
+		if cm.containers[projectID] == cid {
+			delete(cm.containers, projectID)
+		}
+		cm.mu.Unlock()
 	}
 
 	// Ensure image is available
@@ -198,7 +227,9 @@ func (cm *ContainerManager) EnsureContainer(ctx context.Context, projectID, work
 		return "", fmt.Errorf("container manager: start container: %w", err)
 	}
 
+	cm.mu.Lock()
 	cm.containers[projectID] = resp.ID
+	cm.mu.Unlock()
 
 	// Persist to DB
 	if cm.db != nil {
@@ -217,6 +248,36 @@ func (cm *ContainerManager) EnsureContainer(ctx context.Context, projectID, work
 	}
 
 	return resp.ID, nil
+}
+
+func (cm *ContainerManager) beginEnsure(ctx context.Context, projectID string) (func(), error) {
+	for {
+		cm.mu.Lock()
+		if cm.ensureInFlight == nil {
+			cm.ensureInFlight = make(map[string]chan struct{})
+		}
+		if ch, ok := cm.ensureInFlight[projectID]; ok {
+			cm.mu.Unlock()
+			select {
+			case <-ch:
+				continue
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			}
+		}
+		ch := make(chan struct{})
+		cm.ensureInFlight[projectID] = ch
+		cm.mu.Unlock()
+
+		return func() {
+			cm.mu.Lock()
+			if cm.ensureInFlight[projectID] == ch {
+				delete(cm.ensureInFlight, projectID)
+				close(ch)
+			}
+			cm.mu.Unlock()
+		}, nil
+	}
 }
 
 // ExecInContainer executes a command inside the container for the given project.

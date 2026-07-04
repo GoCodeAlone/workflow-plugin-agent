@@ -2,14 +2,79 @@ package orchestrator
 
 import (
 	"context"
+	"errors"
+	"io"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/GoCodeAlone/workflow-plugin-agent/executor"
 	"github.com/GoCodeAlone/workflow-plugin-agent/orchestrator/tools"
 	"github.com/GoCodeAlone/workflow/module"
+	"github.com/docker/docker/api/types"
+	"github.com/docker/docker/api/types/container"
+	"github.com/docker/docker/api/types/image"
+	"github.com/docker/docker/api/types/network"
+	"github.com/docker/docker/client"
+	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
 
 	_ "modernc.org/sqlite"
 )
+
+type blockingPullDockerClient struct {
+	pullEntered chan struct{}
+	releasePull chan struct{}
+}
+
+func newBlockingPullDockerClient() *blockingPullDockerClient {
+	return &blockingPullDockerClient{pullEntered: make(chan struct{}), releasePull: make(chan struct{})}
+}
+
+func (c *blockingPullDockerClient) ContainerCreate(context.Context, *container.Config, *container.HostConfig, *network.NetworkingConfig, *ocispec.Platform, string) (container.CreateResponse, error) {
+	return container.CreateResponse{ID: "container-1"}, nil
+}
+
+func (c *blockingPullDockerClient) ContainerExecAttach(context.Context, string, container.ExecAttachOptions) (types.HijackedResponse, error) {
+	return types.HijackedResponse{}, nil
+}
+
+func (c *blockingPullDockerClient) ContainerExecCreate(context.Context, string, container.ExecOptions) (container.ExecCreateResponse, error) {
+	return container.ExecCreateResponse{ID: "exec-1"}, nil
+}
+
+func (c *blockingPullDockerClient) ContainerExecInspect(context.Context, string) (container.ExecInspect, error) {
+	return container.ExecInspect{}, nil
+}
+
+func (c *blockingPullDockerClient) ContainerInspect(context.Context, string) (container.InspectResponse, error) {
+	return container.InspectResponse{ContainerJSONBase: &container.ContainerJSONBase{State: &container.State{Status: "running", Running: true}}}, nil
+}
+
+func (c *blockingPullDockerClient) ContainerRemove(context.Context, string, container.RemoveOptions) error {
+	return nil
+}
+
+func (c *blockingPullDockerClient) ContainerStart(context.Context, string, container.StartOptions) error {
+	return nil
+}
+
+func (c *blockingPullDockerClient) ContainerStop(context.Context, string, container.StopOptions) error {
+	return nil
+}
+
+func (c *blockingPullDockerClient) ImageInspect(context.Context, string, ...client.ImageInspectOption) (image.InspectResponse, error) {
+	return image.InspectResponse{}, errors.New("missing image")
+}
+
+func (c *blockingPullDockerClient) ImagePull(context.Context, string, image.PullOptions) (io.ReadCloser, error) {
+	close(c.pullEntered)
+	<-c.releasePull
+	return io.NopCloser(strings.NewReader("")), nil
+}
+
+func (c *blockingPullDockerClient) Close() error {
+	return nil
+}
 
 // ---------------------------------------------------------------------------
 // ContainerManager availability tests (no Docker required)
@@ -140,6 +205,53 @@ func TestContainerManager_EnsureContainer_EmptyImage(t *testing.T) {
 	_, err := cm.EnsureContainer(context.Background(), "proj-1", "/tmp/ws", executor.SandboxConfig{})
 	if err == nil {
 		t.Fatal("expected error for empty image")
+	}
+}
+
+func TestContainerManager_EnsureContainerPullDoesNotStarveStatus(t *testing.T) {
+	client := newBlockingPullDockerClient()
+	cm := &ContainerManager{
+		client:     client,
+		containers: make(map[string]string),
+		available:  true,
+	}
+
+	ensureDone := make(chan error, 1)
+	go func() {
+		_, err := cm.EnsureContainer(context.Background(), "proj-1", "/tmp/ws", executor.SandboxConfig{Image: "alpine"})
+		ensureDone <- err
+	}()
+
+	select {
+	case <-client.pullEntered:
+	case <-time.After(time.Second):
+		close(client.releasePull)
+		t.Fatal("EnsureContainer did not reach image pull")
+	}
+
+	statusDone := make(chan error, 1)
+	go func() {
+		status, err := cm.GetContainerStatus(context.Background(), "proj-2")
+		if err == nil && status != "none" {
+			err = errors.New("unexpected status: " + status)
+		}
+		statusDone <- err
+	}()
+
+	select {
+	case err := <-statusDone:
+		if err != nil {
+			close(client.releasePull)
+			t.Fatalf("GetContainerStatus: %v", err)
+		}
+	case <-time.After(500 * time.Millisecond):
+		close(client.releasePull)
+		t.Fatal("GetContainerStatus blocked behind EnsureContainer image pull")
+	}
+
+	close(client.releasePull)
+	if err := <-ensureDone; err != nil {
+		t.Fatalf("EnsureContainer: %v", err)
 	}
 }
 
