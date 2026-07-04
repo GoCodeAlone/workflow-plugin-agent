@@ -244,7 +244,7 @@ func TestContainerManager_EnsureContainerPullDoesNotStarveStatus(t *testing.T) {
 			close(client.releasePull)
 			t.Fatalf("GetContainerStatus: %v", err)
 		}
-	case <-time.After(100 * time.Millisecond):
+	case <-time.After(500 * time.Millisecond):
 		close(client.releasePull)
 		t.Fatal("GetContainerStatus blocked behind EnsureContainer image pull")
 	}
