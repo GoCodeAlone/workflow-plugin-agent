@@ -3,8 +3,8 @@ module github.com/GoCodeAlone/workflow-plugin-agent
 go 1.26.4
 
 require (
-	github.com/GoCodeAlone/modular v1.13.4
-	github.com/GoCodeAlone/workflow v0.84.0
+	github.com/GoCodeAlone/modular v1.13.5
+	github.com/GoCodeAlone/workflow v0.85.2
 	github.com/GoCodeAlone/workflow-plugin-authz v0.5.4
 	github.com/anthropics/anthropic-sdk-go v1.26.0
 	github.com/aws/aws-sdk-go-v2 v1.41.6
@@ -21,6 +21,7 @@ require (
 	github.com/hinshun/vt10x v0.0.0-20220301184237-5011da428d02
 	github.com/ollama/ollama v0.18.3
 	github.com/openai/openai-go v1.12.0
+	github.com/opencontainers/image-spec v1.1.1
 	golang.org/x/sync v0.21.0
 	golang.org/x/text v0.38.0
 	google.golang.org/api v0.272.0
@@ -174,7 +175,6 @@ require (
 	github.com/ncruces/go-strftime v1.0.0 // indirect
 	github.com/oklog/run v1.2.0 // indirect
 	github.com/opencontainers/go-digest v1.0.0 // indirect
-	github.com/opencontainers/image-spec v1.1.1 // indirect
 	github.com/pierrec/lz4/v4 v4.1.27 // indirect
 	github.com/pkg/errors v0.9.1 // indirect
 	github.com/prometheus/client_golang v1.23.2 // indirect
