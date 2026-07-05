@@ -23,8 +23,8 @@ github.com/GoCodeAlone/genkit/go v1.6.2-gocodealone.1 h1:1h1RSXyJow8O2vyXWKbqKLh
 github.com/GoCodeAlone/genkit/go v1.6.2-gocodealone.1/go.mod h1:FC5neH/nZJOqCQvMYodIy36cNZ1PWYJa2zkgkagfytg=
 github.com/GoCodeAlone/go-plugin v1.7.0 h1:EwnhqPlXiNmp85S+MXnKKvm3YlfA6O4NzBb4+GSlEVY=
 github.com/GoCodeAlone/go-plugin v1.7.0/go.mod h1:HbGQRZUIa+jbDfjsaZIMJYvrz+LnxL0mJpggfynSTMk=
-github.com/GoCodeAlone/modular v1.13.4 h1:De4p2qyJSVmstRGno/PM+fPdUCMu/7a9WgU5FUVGDa8=
-github.com/GoCodeAlone/modular v1.13.4/go.mod h1:+JEPUYOxGaD332EMZ5PbJCz5rxwvFu4Tm6MrnZT0vxM=
+github.com/GoCodeAlone/modular v1.13.5 h1:Q+AR3MMAQJctvPJzlRSmTywArbrsXiMM3gzyJN8reBs=
+github.com/GoCodeAlone/modular v1.13.5/go.mod h1:+JEPUYOxGaD332EMZ5PbJCz5rxwvFu4Tm6MrnZT0vxM=
 github.com/GoCodeAlone/modular/modules/auth v1.17.0 h1:GbKG6s/2qe6N9YZ8vtvYsNon56MLWECncPxWvAsazSc=
 github.com/GoCodeAlone/modular/modules/auth v1.17.0/go.mod h1:E9dDIxiAxIrXK8gn/rEhaqI5OYe6Aw/uGpRyI7iyxj8=
 github.com/GoCodeAlone/modular/modules/cache v1.17.0 h1:1cColHYfF7aFZhxBjS4RuZ2wBOYWAIVr5GkJ3nk5VIA=
@@ -35,8 +35,8 @@ github.com/GoCodeAlone/modular/modules/jsonschema v1.17.0 h1:zoWioqUvuNNDfnjHA1s
 github.com/GoCodeAlone/modular/modules/jsonschema v1.17.0/go.mod h1:GDU/jsD6AddmXKedj0wZwieUIaQsTBSGMzuj+XHXMrw=
 github.com/GoCodeAlone/modular/modules/reverseproxy/v2 v2.10.0 h1:+2M/ecyCxDiXfJM4ibcERuu/BBeIbLTQNcVgRsllR64=
 github.com/GoCodeAlone/modular/modules/reverseproxy/v2 v2.10.0/go.mod h1:tlVH1mA5yuU8CB7R7+HXIRaBixZoNid6h+5tew5u3FU=
-github.com/GoCodeAlone/workflow v0.84.0 h1:JJX91+h7QaZ9xUJEBcTrlhvebCVI+/9/2kLn1emckzs=
-github.com/GoCodeAlone/workflow v0.84.0/go.mod h1:vBi/HkWBt8LrZ/J3E61bx/Q4MSh15ieXy8sIEqK5lNU=
+github.com/GoCodeAlone/workflow v0.85.2 h1:u65GfzC0c1bkicOOvyPbgcB1rhodexWd7f+wR6V6o1E=
+github.com/GoCodeAlone/workflow v0.85.2/go.mod h1:tqWHdWHCn2ESB4Rj6FiRjKchof9zjcs11o8AtfOiZaU=
 github.com/GoCodeAlone/workflow-plugin-authz v0.5.4 h1:z33pySf4R5VT6pZSXrNqzJLKJ93srmoJ6UnIV7cPG5I=
 github.com/GoCodeAlone/workflow-plugin-authz v0.5.4/go.mod h1:TPPe4MrjVy7pt5gNwg2a7kb31tYxrq/VR/NHHoooP7E=
 github.com/GoCodeAlone/yaegi v0.17.2 h1:WK6Y6e0t1a6U7r+S2dN3CGWW1PizYD3zO0zneToZPxM=
