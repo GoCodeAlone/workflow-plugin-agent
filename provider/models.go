@@ -21,11 +21,20 @@ type ModelInfo struct {
 	ContextWindow int    `json:"context_window,omitempty"`
 }
 
+type ModelListRequest struct {
+	ProviderType string
+	APIKey       string
+	BaseURL      string
+}
+
+type ModelLister func(ctx context.Context, req ModelListRequest) ([]ModelInfo, error)
+
 // Constants used by model-listing functions, sourced from former provider files.
 const (
 	defaultAnthropicBaseURL = "https://api.anthropic.com"
 	anthropicAPIVersion     = "2023-06-01"
 	defaultOpenAIBaseURL    = "https://api.openai.com"
+	defaultOpenAIChatGPTURL = "https://chatgpt.com/backend-api/codex"
 	defaultCopilotBaseURL   = "https://api.githubcopilot.com"
 	copilotTokenExchangeURL = "https://api.github.com/copilot_internal/v2/token"
 	copilotEditorVersion    = "ratchet/0.1.0"
@@ -41,50 +50,67 @@ type copilotTokenResponse struct {
 // ListModels fetches available models from the given provider type.
 // Only requires an API key and optional base URL — no saved provider needed.
 func ListModels(ctx context.Context, providerType, apiKey, baseURL string) ([]ModelInfo, error) {
-	switch providerType {
-	case "anthropic":
-		return listAnthropicModels(ctx, apiKey, baseURL)
-	case "openai":
-		return listOpenAIModels(ctx, apiKey, baseURL)
-	case "openai_chatgpt":
-		return openAIChatGPTModels(), nil
-	case "openrouter":
+	lister, ok := modelListers[providerType]
+	if !ok {
+		return nil, fmt.Errorf("unsupported provider type: %s", providerType)
+	}
+	return lister(ctx, ModelListRequest{ProviderType: providerType, APIKey: apiKey, BaseURL: baseURL})
+}
+
+var modelListers = map[string]ModelLister{
+	"anthropic": func(ctx context.Context, req ModelListRequest) ([]ModelInfo, error) {
+		return listAnthropicModels(ctx, req.APIKey, req.BaseURL)
+	},
+	"openai": func(ctx context.Context, req ModelListRequest) ([]ModelInfo, error) {
+		return listOpenAIModels(ctx, req.APIKey, req.BaseURL)
+	},
+	"openai_chatgpt": func(ctx context.Context, req ModelListRequest) ([]ModelInfo, error) {
+		return listOpenAIChatGPTModels(ctx, req.APIKey, req.BaseURL)
+	},
+	"openrouter": func(ctx context.Context, req ModelListRequest) ([]ModelInfo, error) {
+		baseURL := req.BaseURL
 		if baseURL == "" {
 			baseURL = "https://openrouter.ai/api/v1"
 		}
-		return listOpenAIModels(ctx, apiKey, baseURL)
-	case "copilot":
-		return listCopilotModels(ctx, apiKey, baseURL)
-	case "copilot_models":
+		return listOpenAIModels(ctx, req.APIKey, baseURL)
+	},
+	"copilot": func(ctx context.Context, req ModelListRequest) ([]ModelInfo, error) {
+		return listCopilotModels(ctx, req.APIKey, req.BaseURL)
+	},
+	"copilot_models": func(ctx context.Context, req ModelListRequest) ([]ModelInfo, error) {
+		baseURL := req.BaseURL
 		if baseURL == "" {
 			baseURL = "https://models.github.ai/inference"
 		}
-		return listOpenAIModels(ctx, apiKey, baseURL)
-	case "openai_azure":
+		return listOpenAIModels(ctx, req.APIKey, baseURL)
+	},
+	"openai_azure": func(context.Context, ModelListRequest) ([]ModelInfo, error) {
 		return azureOpenAIFallbackModels(), nil
-	case "anthropic_bedrock":
+	},
+	"anthropic_bedrock": func(context.Context, ModelListRequest) ([]ModelInfo, error) {
 		return bedrockFallbackModels(), nil
-	case "anthropic_vertex":
+	},
+	"anthropic_vertex": func(context.Context, ModelListRequest) ([]ModelInfo, error) {
 		return vertexFallbackModels(), nil
-	case "anthropic_foundry":
+	},
+	"anthropic_foundry": func(context.Context, ModelListRequest) ([]ModelInfo, error) {
 		return foundryFallbackModels(), nil
-	case "gemini":
-		return listGeminiModels(ctx, apiKey)
-	case "cohere":
-		return listCohereModels(ctx, apiKey, baseURL)
-	case "ollama":
-		return listOllamaModels(ctx, baseURL)
-	case "llama_cpp":
-		return []ModelInfo{
-			{ID: "local", Name: "llama.cpp Local Model"},
-		}, nil
-	case "mock":
-		return []ModelInfo{
-			{ID: "mock-default", Name: "Mock Provider"},
-		}, nil
-	default:
-		return nil, fmt.Errorf("unsupported provider type: %s", providerType)
-	}
+	},
+	"gemini": func(ctx context.Context, req ModelListRequest) ([]ModelInfo, error) {
+		return listGeminiModels(ctx, req.APIKey)
+	},
+	"cohere": func(ctx context.Context, req ModelListRequest) ([]ModelInfo, error) {
+		return listCohereModels(ctx, req.APIKey, req.BaseURL)
+	},
+	"ollama": func(ctx context.Context, req ModelListRequest) ([]ModelInfo, error) {
+		return listOllamaModels(ctx, req.BaseURL)
+	},
+	"llama_cpp": func(context.Context, ModelListRequest) ([]ModelInfo, error) {
+		return []ModelInfo{{ID: "local", Name: "llama.cpp Local Model"}}, nil
+	},
+	"mock": func(context.Context, ModelListRequest) ([]ModelInfo, error) {
+		return []ModelInfo{{ID: "mock-default", Name: "Mock Provider"}}, nil
+	},
 }
 
 // listAnthropicModels calls the Anthropic /v1/models endpoint.
@@ -217,6 +243,121 @@ func listOpenAIModels(ctx context.Context, apiKey, baseURL string) ([]ModelInfo,
 	})
 
 	return models, nil
+}
+
+func listOpenAIChatGPTModels(ctx context.Context, tokenJSON, baseURL string) ([]ModelInfo, error) {
+	if err := ValidateBaseURL(baseURL); err != nil {
+		return nil, err
+	}
+	if baseURL == "" {
+		baseURL = defaultOpenAIChatGPTURL
+	}
+	token, accountID, err := parseOpenAIChatGPTModelToken(tokenJSON)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, strings.TrimRight(baseURL, "/")+"/models?client_version=1.0.0", nil)
+	if err != nil {
+		return nil, fmt.Errorf("openai_chatgpt: create models request: %w", err)
+	}
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Accept", "application/json")
+	if accountID != "" {
+		req.Header.Set("ChatGPT-Account-ID", accountID)
+	}
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("openai_chatgpt: models request failed: %w", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("openai_chatgpt: read models response: %w", err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("openai_chatgpt: models API error (status %d): %s", resp.StatusCode, truncate(string(body), 200))
+	}
+
+	var result struct {
+		Models []struct {
+			Slug             string `json:"slug"`
+			ID               string `json:"id"`
+			DisplayName      string `json:"display_name"`
+			Name             string `json:"name"`
+			Visibility       string `json:"visibility"`
+			ShowInPicker     *bool  `json:"show_in_picker"`
+			ContextWindow    int    `json:"context_window"`
+			MaxContextWindow int    `json:"max_context_window"`
+		} `json:"models"`
+	}
+	if err := json.Unmarshal(body, &result); err != nil {
+		return nil, fmt.Errorf("openai_chatgpt: parse models response: %w", err)
+	}
+
+	models := make([]ModelInfo, 0, len(result.Models))
+	for _, m := range result.Models {
+		if m.Visibility != "" && strings.ToLower(m.Visibility) != "list" {
+			continue
+		}
+		if m.ShowInPicker != nil && !*m.ShowInPicker {
+			continue
+		}
+		id := strings.TrimSpace(m.Slug)
+		if id == "" {
+			id = strings.TrimSpace(m.ID)
+		}
+		if id == "" {
+			continue
+		}
+		name := strings.TrimSpace(m.DisplayName)
+		if name == "" {
+			name = strings.TrimSpace(m.Name)
+		}
+		if name == "" {
+			name = id
+		}
+		contextWindow := m.MaxContextWindow
+		if contextWindow == 0 {
+			contextWindow = m.ContextWindow
+		}
+		models = append(models, ModelInfo{ID: id, Name: name, ContextWindow: contextWindow})
+	}
+	if len(models) == 0 {
+		return nil, fmt.Errorf("openai_chatgpt: models response did not include selectable models")
+	}
+	return models, nil
+}
+
+func parseOpenAIChatGPTModelToken(raw string) (accessToken, accountID string, err error) {
+	var wrapper struct {
+		AccessToken      string `json:"access_token"`
+		AccountID        string `json:"account_id"`
+		ChatGPTAccountID string `json:"chatgpt_account_id"`
+		Tokens           *struct {
+			AccessToken      string `json:"access_token"`
+			AccountID        string `json:"account_id"`
+			ChatGPTAccountID string `json:"chatgpt_account_id"`
+		} `json:"tokens"`
+	}
+	if err := json.Unmarshal([]byte(raw), &wrapper); err != nil {
+		return "", "", fmt.Errorf("openai_chatgpt: parse token bundle: %w", err)
+	}
+	if wrapper.Tokens != nil {
+		wrapper.AccessToken = wrapper.Tokens.AccessToken
+		wrapper.AccountID = wrapper.Tokens.AccountID
+		wrapper.ChatGPTAccountID = wrapper.Tokens.ChatGPTAccountID
+	}
+	accessToken = strings.TrimSpace(wrapper.AccessToken)
+	if accessToken == "" {
+		return "", "", fmt.Errorf("openai_chatgpt: token bundle requires access_token for model discovery")
+	}
+	accountID = strings.TrimSpace(wrapper.ChatGPTAccountID)
+	if accountID == "" {
+		accountID = strings.TrimSpace(wrapper.AccountID)
+	}
+	return accessToken, accountID, nil
 }
 
 // exchangeCopilotToken exchanges a GitHub OAuth token for a Copilot bearer token.
@@ -409,12 +550,6 @@ func cohereFallbackModels() []ModelInfo {
 		{ID: "command-a-03-2025", Name: "Command A (March 2025)"},
 		{ID: "command-r", Name: "Command R"},
 		{ID: "command-r-plus", Name: "Command R+"},
-	}
-}
-
-func openAIChatGPTModels() []ModelInfo {
-	return []ModelInfo{
-		{ID: "gpt-5-codex", Name: "GPT-5 Codex"},
 	}
 }
 
