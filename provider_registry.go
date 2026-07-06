@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
@@ -58,6 +59,24 @@ func NewProviderRegistry(db *sql.DB, secretsProvider secrets.Provider) *Provider
 	}
 	r.Factories["openai"] = func(ctx context.Context, apiKey string, cfg LLMProviderConfig) (provider.Provider, error) {
 		return gkprov.NewOpenAIProvider(ctx, apiKey, cfg.Model, cfg.BaseURL, cfg.MaxTokens)
+	}
+	r.Factories["openai_compatible"] = func(ctx context.Context, apiKey string, cfg LLMProviderConfig) (provider.Provider, error) {
+		if strings.TrimSpace(cfg.BaseURL) == "" {
+			return nil, fmt.Errorf("openai_compatible: base_url is required")
+		}
+		return gkprov.NewOpenAICompatibleProvider(ctx, "openai_compatible", apiKey, cfg.Model, cfg.BaseURL, cfg.MaxTokens)
+	}
+	r.Factories["anthropic_compatible"] = func(ctx context.Context, apiKey string, cfg LLMProviderConfig) (provider.Provider, error) {
+		if strings.TrimSpace(cfg.BaseURL) == "" {
+			return nil, fmt.Errorf("anthropic_compatible: base_url is required")
+		}
+		return gkprov.NewAnthropicCompatibleProvider(ctx, "anthropic_compatible", apiKey, cfg.Model, cfg.BaseURL, cfg.MaxTokens)
+	}
+	r.Factories["custom"] = func(ctx context.Context, apiKey string, cfg LLMProviderConfig) (provider.Provider, error) {
+		if strings.TrimSpace(cfg.BaseURL) == "" {
+			return nil, fmt.Errorf("custom: base_url is required")
+		}
+		return gkprov.NewOpenAICompatibleProvider(ctx, "custom", apiKey, cfg.Model, cfg.BaseURL, cfg.MaxTokens)
 	}
 	r.Factories["openrouter"] = func(ctx context.Context, apiKey string, cfg LLMProviderConfig) (provider.Provider, error) {
 		baseURL := cfg.BaseURL

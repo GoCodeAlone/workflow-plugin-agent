@@ -30,36 +30,44 @@ const (
 // to prevent races when multiple VertexAI providers initialize concurrently.
 var vertexCredsMu sync.Mutex
 
-
 // initGenkitWithPlugin creates a Genkit instance with a single plugin registered.
 func initGenkitWithPlugin(ctx context.Context, plugin gk.GenkitOption) *gk.Genkit {
 	return gk.Init(ctx, plugin)
 }
 
-// NewAnthropicProvider creates a provider backed by Genkit's Anthropic plugin.
-func NewAnthropicProvider(ctx context.Context, apiKey, model, baseURL string, maxTokens int) (provider.Provider, error) {
+func newAnthropicProvider(ctx context.Context, providerName, displayName, apiKey, model, baseURL string, maxTokens int) (provider.Provider, error) {
 	if apiKey == "" {
-		return nil, fmt.Errorf("anthropic: APIKey is required")
+		return nil, fmt.Errorf("%s: APIKey is required", providerName)
 	}
 	if model == "" {
 		model = defaultAnthropicModel
 	}
 	if err := provider.ValidateBaseURL(baseURL); err != nil {
-		return nil, fmt.Errorf("anthropic: %w", err)
+		return nil, fmt.Errorf("%s: %w", providerName, err)
 	}
 	p := &anthropicPlugin.Anthropic{APIKey: apiKey, BaseURL: baseURL}
 	g := initGenkitWithPlugin(ctx, gk.WithPlugins(p))
 	return &genkitProvider{
 		g:         g,
 		modelName: "anthropic/" + model,
-		name:      "anthropic",
+		name:      providerName,
 		maxTokens: maxTokens,
 		authInfo: provider.AuthModeInfo{
 			Mode:        "api_key",
-			DisplayName: "Anthropic",
+			DisplayName: displayName,
 			ServerSafe:  true,
 		},
 	}, nil
+}
+
+// NewAnthropicProvider creates a provider backed by Genkit's Anthropic plugin.
+func NewAnthropicProvider(ctx context.Context, apiKey, model, baseURL string, maxTokens int) (provider.Provider, error) {
+	return newAnthropicProvider(ctx, "anthropic", "Anthropic", apiKey, model, baseURL, maxTokens)
+}
+
+// NewAnthropicCompatibleProvider creates a provider for Anthropic-compatible endpoints.
+func NewAnthropicCompatibleProvider(ctx context.Context, providerName, apiKey, model, baseURL string, maxTokens int) (provider.Provider, error) {
+	return newAnthropicProvider(ctx, providerName, providerName, apiKey, model, baseURL, maxTokens)
 }
 
 // NewOpenAIProvider creates a provider backed by Genkit's OpenAI plugin.
@@ -376,16 +384,16 @@ func NewCursorCLIProvider(workDir string) (provider.Provider, error) {
 	return newPTYProvider(CursorCLIAdapter{}, workDir)
 }
 
-// NewBedrockProvider creates a provider for AWS Bedrock using an OpenAI-compatible endpoint.
-// Wraps existing Bedrock implementation as a provider.Provider until a native Genkit plugin is available.
-func NewBedrockProvider(ctx context.Context, region, model, accessKeyID, secretAccessKey, sessionToken, baseURL string, maxTokens int) (provider.Provider, error) {
+// NewBedrockProvider creates a provider for AWS Bedrock using the provider-neutral Converse API.
+func NewBedrockProvider(ctx context.Context, providerName, region, model, accessKeyID, secretAccessKey, sessionToken, baseURL string, maxTokens int) (provider.Provider, error) {
 	if secretAccessKey == "" {
-		return nil, fmt.Errorf("anthropic_bedrock: secretAccessKey is required")
+		return nil, fmt.Errorf("%s: secretAccessKey is required", providerName)
 	}
 	if region == "" {
 		region = "us-east-1"
 	}
-	return provider.NewAnthropicBedrockProvider(provider.AnthropicBedrockConfig{
+	return provider.NewBedrockProvider(provider.BedrockConfig{
+		Name:            providerName,
 		Region:          region,
 		Model:           model,
 		MaxTokens:       maxTokens,

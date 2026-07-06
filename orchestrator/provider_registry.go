@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
@@ -18,7 +19,7 @@ import (
 type LLMProviderConfig struct {
 	ID         string `json:"id"`
 	Alias      string `json:"alias"`
-	Type       string `json:"type"`        // provider type (e.g. "anthropic", "openai", "openai_chatgpt", "copilot_models", "openai_azure", "anthropic_foundry", "anthropic_vertex", "anthropic_bedrock")
+	Type       string `json:"type"`        // provider type (e.g. "anthropic", "openai", "openai_compatible", "anthropic_compatible", "openai_chatgpt", "copilot_models", "openai_azure", "anthropic_foundry", "anthropic_vertex", "bedrock")
 	Model      string `json:"model"`       // model identifier
 	SecretName string `json:"secret_name"` // key in secrets provider for API key
 	BaseURL    string `json:"base_url"`    // optional override
@@ -84,6 +85,9 @@ func NewProviderRegistry(db *sql.DB, secretsProvider func() secrets.Provider) *P
 	r.factories["mock"] = mockProviderFactory
 	r.factories["anthropic"] = anthropicProviderFactory
 	r.factories["openai"] = openaiProviderFactory
+	r.factories["openai_compatible"] = openAICompatibleProviderFactory
+	r.factories["anthropic_compatible"] = anthropicCompatibleProviderFactory
+	r.factories["custom"] = customProviderFactory
 	r.factories["openai_chatgpt"] = openaiChatGPTProviderFactory
 	r.factories["openrouter"] = openrouterProviderFactory
 	r.factories["copilot"] = copilotProviderFactory
@@ -92,6 +96,7 @@ func NewProviderRegistry(db *sql.DB, secretsProvider func() secrets.Provider) *P
 	r.factories["openai_azure"] = openaiAzureProviderFactory
 	r.factories["anthropic_foundry"] = anthropicFoundryProviderFactory
 	r.factories["anthropic_vertex"] = anthropicVertexProviderFactory
+	r.factories["bedrock"] = bedrockProviderFactory
 	r.factories["anthropic_bedrock"] = anthropicBedrockProviderFactory
 	r.factories["gemini"] = geminiProviderFactory
 	r.factories["ollama"] = ollamaProviderFactory
@@ -306,6 +311,32 @@ func openaiProviderFactory(ctx context.Context, apiKey string, cfg LLMProviderCo
 	return gkprov.NewOpenAIProvider(ctx, apiKey, cfg.Model, cfg.BaseURL, cfg.MaxTokens)
 }
 
+func openAICompatibleProviderFactory(ctx context.Context, apiKey string, cfg LLMProviderConfig) (provider.Provider, error) {
+	if strings.TrimSpace(cfg.BaseURL) == "" {
+		return nil, fmt.Errorf("openai_compatible: base_url is required")
+	}
+	return gkprov.NewOpenAICompatibleProvider(ctx, "openai_compatible", apiKey, cfg.Model, cfg.BaseURL, cfg.MaxTokens)
+}
+
+func anthropicCompatibleProviderFactory(ctx context.Context, apiKey string, cfg LLMProviderConfig) (provider.Provider, error) {
+	if strings.TrimSpace(cfg.BaseURL) == "" {
+		return nil, fmt.Errorf("anthropic_compatible: base_url is required")
+	}
+	return gkprov.NewAnthropicCompatibleProvider(ctx, "anthropic_compatible", apiKey, cfg.Model, cfg.BaseURL, cfg.MaxTokens)
+}
+
+func customProviderFactory(ctx context.Context, apiKey string, cfg LLMProviderConfig) (provider.Provider, error) {
+	if strings.TrimSpace(cfg.BaseURL) == "" {
+		return nil, fmt.Errorf("custom: base_url is required")
+	}
+	switch apiCompatibility(cfg.settings()) {
+	case "anthropic":
+		return gkprov.NewAnthropicCompatibleProvider(ctx, "custom", apiKey, cfg.Model, cfg.BaseURL, cfg.MaxTokens)
+	default:
+		return gkprov.NewOpenAICompatibleProvider(ctx, "custom", apiKey, cfg.Model, cfg.BaseURL, cfg.MaxTokens)
+	}
+}
+
 func openaiChatGPTProviderFactory(ctx context.Context, tokenJSON string, cfg LLMProviderConfig) (provider.Provider, error) {
 	return gkprov.NewOpenAIChatGPTProvider(ctx, tokenJSON, cfg.Model, cfg.BaseURL, cfg.MaxTokens)
 }
@@ -386,10 +417,23 @@ func llamaCppProviderFactory(ctx context.Context, _ string, cfg LLMProviderConfi
 	return gkprov.NewOpenAICompatibleProvider(ctx, "llama_cpp", "", cfg.Model, baseURL, cfg.MaxTokens)
 }
 
-func anthropicBedrockProviderFactory(ctx context.Context, apiKey string, cfg LLMProviderConfig) (provider.Provider, error) {
+func bedrockProviderFactory(ctx context.Context, apiKey string, cfg LLMProviderConfig) (provider.Provider, error) {
 	s := cfg.settings()
 	return gkprov.NewBedrockProvider(ctx,
-		s["region"], cfg.Model, s["access_key_id"], apiKey, s["session_token"], cfg.BaseURL, cfg.MaxTokens)
+		cfg.Type, s["region"], cfg.Model, s["access_key_id"], apiKey, s["session_token"], cfg.BaseURL, cfg.MaxTokens)
+}
+
+func anthropicBedrockProviderFactory(ctx context.Context, apiKey string, cfg LLMProviderConfig) (provider.Provider, error) {
+	return bedrockProviderFactory(ctx, apiKey, cfg)
+}
+
+func apiCompatibility(settings map[string]string) string {
+	switch strings.ToLower(strings.TrimSpace(settings["api_compat"])) {
+	case "anthropic", "anthropic_compatible":
+		return "anthropic"
+	default:
+		return "openai"
+	}
 }
 
 func claudeCodeProviderFactory(_ context.Context, _ string, cfg LLMProviderConfig) (provider.Provider, error) {

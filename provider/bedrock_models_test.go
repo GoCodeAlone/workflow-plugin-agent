@@ -20,7 +20,7 @@ func (f *fakeBedrockModelLister) ListFoundationModels(ctx context.Context, in *a
 	return f.out, f.err
 }
 
-func TestListBedrockModelsFromAPIListsAnthropicTextModels(t *testing.T) {
+func TestListBedrockModelsFromAPIListsAllTextModels(t *testing.T) {
 	streaming := true
 	api := &fakeBedrockModelLister{out: &awsbedrock.ListFoundationModelsOutput{
 		ModelSummaries: []types.FoundationModelSummary{
@@ -57,8 +57,8 @@ func TestListBedrockModelsFromAPIListsAnthropicTextModels(t *testing.T) {
 	if api.input == nil {
 		t.Fatal("ListFoundationModels was not called")
 	}
-	if api.input.ByProvider == nil || *api.input.ByProvider != "Anthropic" {
-		t.Fatalf("ByProvider = %#v", api.input.ByProvider)
+	if api.input.ByProvider != nil {
+		t.Fatalf("ByProvider = %q, want nil", *api.input.ByProvider)
 	}
 	if api.input.ByOutputModality != types.ModelModalityText {
 		t.Fatalf("ByOutputModality = %q", api.input.ByOutputModality)
@@ -66,14 +66,20 @@ func TestListBedrockModelsFromAPIListsAnthropicTextModels(t *testing.T) {
 	if api.input.ByInferenceType != types.InferenceTypeOnDemand {
 		t.Fatalf("ByInferenceType = %q", api.input.ByInferenceType)
 	}
-	if len(models) != 1 {
+	if len(models) != 2 {
 		t.Fatalf("models = %+v", models)
 	}
-	if models[0].ID != "anthropic.claude-sonnet-4-20250514-v1:0" {
-		t.Fatalf("model ID = %q", models[0].ID)
+	if models[0].ID != "amazon.titan-text-lite-v1" {
+		t.Fatalf("first model ID = %q", models[0].ID)
 	}
-	if models[0].Name != "Anthropic Claude Sonnet 4" {
-		t.Fatalf("model name = %q", models[0].Name)
+	if models[0].Name != "Amazon Titan Text Lite" {
+		t.Fatalf("first model name = %q", models[0].Name)
+	}
+	if models[1].ID != "anthropic.claude-sonnet-4-20250514-v1:0" {
+		t.Fatalf("second model ID = %q", models[1].ID)
+	}
+	if models[1].Name != "Anthropic Claude Sonnet 4" {
+		t.Fatalf("second model name = %q", models[1].Name)
 	}
 }
 

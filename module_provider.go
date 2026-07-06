@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
@@ -204,6 +205,49 @@ func newProviderModuleFactory() plugin.ModuleFactory {
 				p = prov
 			}
 
+		case "openai_compatible":
+			if strings.TrimSpace(baseURL) == "" {
+				p = &errProvider{err: fmt.Errorf("agent.provider %q: openai_compatible base_url is required", name)}
+			} else if prov, err := gkprov.NewOpenAICompatibleProvider(context.TODO() /* ModuleFactory doesn't receive ctx; TODO: thread ctx via Start() */, "openai_compatible", apiKey, model, baseURL, maxTokens); err != nil {
+				p = &errProvider{err: err}
+			} else {
+				p = prov
+			}
+
+		case "anthropic_compatible":
+			if strings.TrimSpace(baseURL) == "" {
+				p = &errProvider{err: fmt.Errorf("agent.provider %q: anthropic_compatible base_url is required", name)}
+			} else if prov, err := gkprov.NewAnthropicCompatibleProvider(context.TODO() /* ModuleFactory doesn't receive ctx; TODO: thread ctx via Start() */, "anthropic_compatible", apiKey, model, baseURL, maxTokens); err != nil {
+				p = &errProvider{err: err}
+			} else {
+				p = prov
+			}
+
+		case "custom":
+			if strings.TrimSpace(baseURL) == "" {
+				p = &errProvider{err: fmt.Errorf("agent.provider %q: custom base_url is required", name)}
+			} else if compat, _ := cfg["api_compat"].(string); strings.EqualFold(compat, "anthropic") || strings.EqualFold(compat, "anthropic_compatible") {
+				if prov, err := gkprov.NewAnthropicCompatibleProvider(context.TODO() /* ModuleFactory doesn't receive ctx; TODO: thread ctx via Start() */, "custom", apiKey, model, baseURL, maxTokens); err != nil {
+					p = &errProvider{err: err}
+				} else {
+					p = prov
+				}
+			} else if prov, err := gkprov.NewOpenAICompatibleProvider(context.TODO() /* ModuleFactory doesn't receive ctx; TODO: thread ctx via Start() */, "custom", apiKey, model, baseURL, maxTokens); err != nil {
+				p = &errProvider{err: err}
+			} else {
+				p = prov
+			}
+
+		case "bedrock", "anthropic_bedrock":
+			region, _ := cfg["region"].(string)
+			accessKeyID, _ := cfg["access_key_id"].(string)
+			sessionToken, _ := cfg["session_token"].(string)
+			if prov, err := gkprov.NewBedrockProvider(context.TODO() /* ModuleFactory doesn't receive ctx; TODO: thread ctx via Start() */, providerType, region, model, accessKeyID, apiKey, sessionToken, baseURL, maxTokens); err != nil {
+				p = &errProvider{err: err}
+			} else {
+				p = prov
+			}
+
 		case "copilot":
 			if baseURL == "" {
 				baseURL = "https://api.githubcopilot.com"
@@ -229,7 +273,7 @@ func newProviderModuleFactory() plugin.ModuleFactory {
 			}
 
 		default:
-			p = &errProvider{err: fmt.Errorf("agent.provider %q: unrecognized provider type %q (supported: mock, test, anthropic, openai, copilot, ollama, llama_cpp)", name, providerType)}
+			p = &errProvider{err: fmt.Errorf("agent.provider %q: unrecognized provider type %q (supported: mock, test, anthropic, openai, openai_compatible, anthropic_compatible, custom, bedrock, anthropic_bedrock, copilot, ollama, llama_cpp)", name, providerType)}
 		}
 
 		// Parse agent seeds
