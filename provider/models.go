@@ -10,6 +10,10 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/credentials"
+	awsbedrock "github.com/aws/aws-sdk-go-v2/service/bedrock"
+	bedrocktypes "github.com/aws/aws-sdk-go-v2/service/bedrock/types"
 	"github.com/google/generative-ai-go/genai"
 	"google.golang.org/api/iterator"
 	googleoption "google.golang.org/api/option"
@@ -26,6 +30,7 @@ type ModelListRequest struct {
 	ProviderType string
 	APIKey       string
 	BaseURL      string
+	Settings     map[string]string
 }
 
 type ModelLister func(ctx context.Context, req ModelListRequest) ([]ModelInfo, error)
@@ -53,11 +58,15 @@ type copilotTokenResponse struct {
 // ListModels fetches available models from the given provider type.
 // Only requires an API key and optional base URL — no saved provider needed.
 func ListModels(ctx context.Context, providerType, apiKey, baseURL string) ([]ModelInfo, error) {
+	return ListModelsWithSettings(ctx, providerType, apiKey, baseURL, nil)
+}
+
+func ListModelsWithSettings(ctx context.Context, providerType, apiKey, baseURL string, settings map[string]string) ([]ModelInfo, error) {
 	lister, ok := modelListers[providerType]
 	if !ok {
 		return nil, fmt.Errorf("unsupported provider type: %s", providerType)
 	}
-	return lister(ctx, ModelListRequest{ProviderType: providerType, APIKey: apiKey, BaseURL: baseURL})
+	return lister(ctx, ModelListRequest{ProviderType: providerType, APIKey: apiKey, BaseURL: baseURL, Settings: settings})
 }
 
 var modelListers = map[string]ModelLister{
@@ -90,8 +99,8 @@ var modelListers = map[string]ModelLister{
 	"openai_azure": func(context.Context, ModelListRequest) ([]ModelInfo, error) {
 		return nil, dynamicModelListingUnsupported("openai_azure")
 	},
-	"anthropic_bedrock": func(context.Context, ModelListRequest) ([]ModelInfo, error) {
-		return nil, dynamicModelListingUnsupported("anthropic_bedrock")
+	"anthropic_bedrock": func(ctx context.Context, req ModelListRequest) ([]ModelInfo, error) {
+		return listBedrockModels(ctx, req)
 	},
 	"anthropic_vertex": func(context.Context, ModelListRequest) ([]ModelInfo, error) {
 		return nil, dynamicModelListingUnsupported("anthropic_vertex")
@@ -602,6 +611,145 @@ func listGeminiModels(ctx context.Context, apiKey string) ([]ModelInfo, error) {
 
 func dynamicModelListingUnsupported(providerType string) error {
 	return fmt.Errorf("%s: dynamic model listing is not implemented for this provider; specify a custom model ID", providerType)
+}
+
+type bedrockModelListConfig struct {
+	Region          string
+	AccessKeyID     string
+	SecretAccessKey string
+	SessionToken    string
+}
+
+type bedrockFoundationModelLister interface {
+	ListFoundationModels(context.Context, *awsbedrock.ListFoundationModelsInput, ...func(*awsbedrock.Options)) (*awsbedrock.ListFoundationModelsOutput, error)
+}
+
+func bedrockModelListConfigFromRequest(req ModelListRequest) (bedrockModelListConfig, error) {
+	cfg := bedrockModelListConfig{
+		Region:          req.Settings["region"],
+		AccessKeyID:     req.Settings["access_key_id"],
+		SecretAccessKey: req.APIKey,
+		SessionToken:    req.Settings["session_token"],
+	}
+	if strings.TrimSpace(req.APIKey) != "" && strings.HasPrefix(strings.TrimSpace(req.APIKey), "{") {
+		var secret struct {
+			Region          string `json:"region"`
+			AccessKeyID     string `json:"access_key_id"`
+			SecretAccessKey string `json:"secret_access_key"`
+			SessionToken    string `json:"session_token"`
+		}
+		if err := json.Unmarshal([]byte(req.APIKey), &secret); err != nil {
+			return bedrockModelListConfig{}, fmt.Errorf("anthropic_bedrock: parse credential JSON: %w", err)
+		}
+		if cfg.Region == "" {
+			cfg.Region = secret.Region
+		}
+		if cfg.AccessKeyID == "" {
+			cfg.AccessKeyID = secret.AccessKeyID
+		}
+		if cfg.SecretAccessKey == "" {
+			cfg.SecretAccessKey = secret.SecretAccessKey
+		}
+		if cfg.SessionToken == "" {
+			cfg.SessionToken = secret.SessionToken
+		}
+	}
+	if cfg.Region == "" {
+		cfg.Region = defaultBedrockRegion
+	}
+	cfg.AccessKeyID = strings.TrimSpace(cfg.AccessKeyID)
+	cfg.SecretAccessKey = strings.TrimSpace(cfg.SecretAccessKey)
+	cfg.SessionToken = strings.TrimSpace(cfg.SessionToken)
+	if cfg.AccessKeyID == "" {
+		return bedrockModelListConfig{}, fmt.Errorf("anthropic_bedrock: access_key_id setting is required for model discovery")
+	}
+	if cfg.SecretAccessKey == "" {
+		return bedrockModelListConfig{}, fmt.Errorf("anthropic_bedrock: secret access key is required for model discovery")
+	}
+	return cfg, nil
+}
+
+func listBedrockModels(ctx context.Context, req ModelListRequest) ([]ModelInfo, error) {
+	if err := ValidateBaseURL(req.BaseURL); err != nil {
+		return nil, err
+	}
+	cfg, err := bedrockModelListConfigFromRequest(req)
+	if err != nil {
+		return nil, err
+	}
+	awsCfg := aws.Config{
+		Region:      cfg.Region,
+		Credentials: credentials.NewStaticCredentialsProvider(cfg.AccessKeyID, cfg.SecretAccessKey, cfg.SessionToken),
+		HTTPClient:  modelHTTPClient,
+	}
+	opts := []func(*awsbedrock.Options){}
+	if req.BaseURL != "" {
+		opts = append(opts, func(o *awsbedrock.Options) {
+			o.BaseEndpoint = aws.String(strings.TrimRight(req.BaseURL, "/"))
+		})
+	}
+	return listBedrockModelsFromAPI(ctx, awsbedrock.NewFromConfig(awsCfg, opts...))
+}
+
+func listBedrockModelsFromAPI(ctx context.Context, api bedrockFoundationModelLister) ([]ModelInfo, error) {
+	out, err := api.ListFoundationModels(ctx, &awsbedrock.ListFoundationModelsInput{
+		ByProvider:       aws.String("Anthropic"),
+		ByOutputModality: bedrocktypes.ModelModalityText,
+		ByInferenceType:  bedrocktypes.InferenceTypeOnDemand,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("anthropic_bedrock: list foundation models: %w", err)
+	}
+	models := make([]ModelInfo, 0, len(out.ModelSummaries))
+	for _, summary := range out.ModelSummaries {
+		id := strings.TrimSpace(aws.ToString(summary.ModelId))
+		if id == "" {
+			continue
+		}
+		if providerName := strings.TrimSpace(aws.ToString(summary.ProviderName)); providerName != "" && !strings.EqualFold(providerName, "Anthropic") {
+			continue
+		}
+		if len(summary.OutputModalities) > 0 && !modelModalitiesContain(summary.OutputModalities, bedrocktypes.ModelModalityText) {
+			continue
+		}
+		if len(summary.InferenceTypesSupported) > 0 && !inferenceTypesContain(summary.InferenceTypesSupported, bedrocktypes.InferenceTypeOnDemand) {
+			continue
+		}
+		name := strings.TrimSpace(aws.ToString(summary.ModelName))
+		if name == "" {
+			name = id
+		}
+		providerName := strings.TrimSpace(aws.ToString(summary.ProviderName))
+		if providerName != "" && !strings.HasPrefix(strings.ToLower(name), strings.ToLower(providerName)+" ") {
+			name = providerName + " " + name
+		}
+		models = append(models, ModelInfo{ID: id, Name: name})
+	}
+	if len(models) == 0 {
+		return nil, fmt.Errorf("anthropic_bedrock: no selectable Anthropic text models returned")
+	}
+	sort.Slice(models, func(i, j int) bool {
+		return models[i].ID < models[j].ID
+	})
+	return models, nil
+}
+
+func modelModalitiesContain(values []bedrocktypes.ModelModality, want bedrocktypes.ModelModality) bool {
+	for _, v := range values {
+		if v == want {
+			return true
+		}
+	}
+	return false
+}
+
+func inferenceTypesContain(values []bedrocktypes.InferenceType, want bedrocktypes.InferenceType) bool {
+	for _, v := range values {
+		if v == want {
+			return true
+		}
+	}
+	return false
 }
 
 // listOllamaModels lists models available on a local Ollama server.
