@@ -286,12 +286,14 @@ func TestProviderRegistryNewProviderTypes(t *testing.T) {
 		name     string
 		typ      string
 		settings string
+		secret   string
 		wantName string
 	}{
-		{"copilot_models", "copilot_models", "{}", "copilot_models"},
-		{"openai_azure", "openai_azure", `{"resource":"myres","deployment_name":"gpt4"}`, "openai_azure"},
-		{"anthropic_foundry", "anthropic_foundry", `{"resource":"myres"}`, "anthropic_foundry"},
-		{"anthropic_bedrock", "anthropic_bedrock", `{"region":"us-east-1","access_key_id":"AKID"}`, "anthropic_bedrock"},
+		{"copilot_models", "copilot_models", "{}", "test-secret", "copilot_models"},
+		{"openai_chatgpt", "openai_chatgpt", "{}", `{"access_token":"token","refresh_token":"refresh","account_id":"acct"}`, "openai_chatgpt"},
+		{"openai_azure", "openai_azure", `{"resource":"myres","deployment_name":"gpt4"}`, "test-secret", "openai_azure"},
+		{"anthropic_foundry", "anthropic_foundry", `{"resource":"myres"}`, "test-secret", "anthropic_foundry"},
+		{"anthropic_bedrock", "anthropic_bedrock", `{"region":"us-east-1","access_key_id":"AKID"}`, "test-secret", "anthropic_bedrock"},
 	}
 	// Note: anthropic_vertex requires valid GCP credentials JSON or ADC and is tested separately.
 
@@ -299,7 +301,7 @@ func TestProviderRegistryNewProviderTypes(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			db := setupTestDB(t)
 			sec := &memSecretsProvider{data: map[string]string{
-				"TEST_KEY": "test-secret",
+				"TEST_KEY": tt.secret,
 			}}
 
 			_, err := db.Exec(`INSERT INTO llm_providers (id, alias, type, model, secret_name, settings)

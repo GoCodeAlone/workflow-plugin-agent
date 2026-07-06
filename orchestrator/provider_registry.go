@@ -18,7 +18,7 @@ import (
 type LLMProviderConfig struct {
 	ID         string `json:"id"`
 	Alias      string `json:"alias"`
-	Type       string `json:"type"`        // provider type (e.g. "anthropic", "openai", "copilot_models", "openai_azure", "anthropic_foundry", "anthropic_vertex", "anthropic_bedrock")
+	Type       string `json:"type"`        // provider type (e.g. "anthropic", "openai", "openai_chatgpt", "copilot_models", "openai_azure", "anthropic_foundry", "anthropic_vertex", "anthropic_bedrock")
 	Model      string `json:"model"`       // model identifier
 	SecretName string `json:"secret_name"` // key in secrets provider for API key
 	BaseURL    string `json:"base_url"`    // optional override
@@ -84,6 +84,7 @@ func NewProviderRegistry(db *sql.DB, secretsProvider func() secrets.Provider) *P
 	r.factories["mock"] = mockProviderFactory
 	r.factories["anthropic"] = anthropicProviderFactory
 	r.factories["openai"] = openaiProviderFactory
+	r.factories["openai_chatgpt"] = openaiChatGPTProviderFactory
 	r.factories["openrouter"] = openrouterProviderFactory
 	r.factories["copilot"] = copilotProviderFactory
 	r.factories["cohere"] = cohereProviderFactory
@@ -303,6 +304,10 @@ func anthropicProviderFactory(ctx context.Context, apiKey string, cfg LLMProvide
 
 func openaiProviderFactory(ctx context.Context, apiKey string, cfg LLMProviderConfig) (provider.Provider, error) {
 	return gkprov.NewOpenAIProvider(ctx, apiKey, cfg.Model, cfg.BaseURL, cfg.MaxTokens)
+}
+
+func openaiChatGPTProviderFactory(ctx context.Context, tokenJSON string, cfg LLMProviderConfig) (provider.Provider, error) {
+	return gkprov.NewOpenAIChatGPTProvider(ctx, tokenJSON, cfg.Model, cfg.BaseURL, cfg.MaxTokens)
 }
 
 func openrouterProviderFactory(ctx context.Context, apiKey string, cfg LLMProviderConfig) (provider.Provider, error) {

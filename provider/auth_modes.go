@@ -21,6 +21,7 @@ func AllAuthModes() []AuthModeInfo {
 		{Mode: "foundry", DisplayName: "Anthropic (Azure AI Foundry)", Description: "Access Claude models via Microsoft Azure AI Foundry.", DocsURL: "https://platform.claude.com/docs/en/build-with-claude/claude-in-microsoft-foundry", ServerSafe: true},
 		// OpenAI
 		{Mode: "direct", DisplayName: "OpenAI (Direct API)", Description: "Direct access to OpenAI models via API key.", DocsURL: "https://platform.openai.com/docs/api-reference/introduction", ServerSafe: true},
+		{Mode: "chatgpt", DisplayName: "OpenAI ChatGPT subscription", Description: "Uses ChatGPT account credentials for OpenAI Codex models. For local CLI/IDE use only.", DocsURL: "https://developers.openai.com/codex/auth", ServerSafe: false},
 		{Mode: "azure", DisplayName: "OpenAI (Azure OpenAI Service)", Description: "Access OpenAI models via Azure OpenAI Service.", DocsURL: "https://learn.microsoft.com/en-us/azure/ai-services/openai/reference", ServerSafe: true},
 		{Mode: "openrouter", DisplayName: "OpenRouter", Description: "Access multiple AI models via OpenRouter's unified API.", DocsURL: "https://openrouter.ai/docs/api/reference/authentication", ServerSafe: true},
 		// GitHub Copilot
