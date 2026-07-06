@@ -84,7 +84,7 @@ func NewProviderRegistry(db *sql.DB, secretsProvider func() secrets.Provider) *P
 	r.factories["mock"] = mockProviderFactory
 	r.factories["anthropic"] = anthropicProviderFactory
 	r.factories["openai"] = openaiProviderFactory
-	r.factories["openai_chatgpt"] = openAIChatGPTProviderFactory
+	r.factories["openai_chatgpt"] = openaiChatGPTProviderFactory
 	r.factories["openrouter"] = openrouterProviderFactory
 	r.factories["copilot"] = copilotProviderFactory
 	r.factories["cohere"] = cohereProviderFactory
@@ -306,7 +306,7 @@ func openaiProviderFactory(ctx context.Context, apiKey string, cfg LLMProviderCo
 	return gkprov.NewOpenAIProvider(ctx, apiKey, cfg.Model, cfg.BaseURL, cfg.MaxTokens)
 }
 
-func openAIChatGPTProviderFactory(ctx context.Context, tokenJSON string, cfg LLMProviderConfig) (provider.Provider, error) {
+func openaiChatGPTProviderFactory(ctx context.Context, tokenJSON string, cfg LLMProviderConfig) (provider.Provider, error) {
 	return gkprov.NewOpenAIChatGPTProvider(ctx, tokenJSON, cfg.Model, cfg.BaseURL, cfg.MaxTokens)
 }
 

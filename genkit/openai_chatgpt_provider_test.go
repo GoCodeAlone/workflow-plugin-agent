@@ -176,6 +176,38 @@ func TestOpenAIChatGPTProviderStreamParsesSSE(t *testing.T) {
 	}
 }
 
+func TestOpenAIChatGPTProviderStreamAllowsLargeSSELines(t *testing.T) {
+	largeDelta := strings.Repeat("x", 80*1024)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = w.Write([]byte(fmt.Sprintf("data: {\"type\":\"response.output_text.delta\",\"delta\":%q}\n\n", largeDelta)))
+		_, _ = w.Write([]byte("data: {\"type\":\"response.completed\"}\n\n"))
+	}))
+	defer server.Close()
+
+	p, err := newOpenAIChatGPTProviderWithClient(http.DefaultClient, tokenBundleJSON(t, "access-token", "refresh-token", "acct_123", time.Now().Add(time.Hour)), "gpt-5-codex", server.URL+"/backend-api/codex", server.URL+"/oauth/token", 0)
+	if err != nil {
+		t.Fatalf("new provider: %v", err)
+	}
+	ch, err := p.Stream(context.Background(), []provider.Message{{Role: provider.RoleUser, Content: "hi"}}, nil)
+	if err != nil {
+		t.Fatalf("Stream: %v", err)
+	}
+
+	var text string
+	for ev := range ch {
+		switch ev.Type {
+		case "text":
+			text += ev.Text
+		case "error":
+			t.Fatalf("stream error: %s", ev.Error)
+		}
+	}
+	if text != largeDelta {
+		t.Fatalf("large delta length = %d, want %d", len(text), len(largeDelta))
+	}
+}
+
 func tokenBundleJSON(t *testing.T, access, refresh, account string, expires time.Time) string {
 	t.Helper()
 	raw, err := json.Marshal(OpenAIChatGPTTokenBundle{

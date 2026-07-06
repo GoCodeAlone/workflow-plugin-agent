@@ -117,7 +117,7 @@ func (p *openAIChatGPTProvider) AuthModeInfo() provider.AuthModeInfo {
 	return provider.AuthModeInfo{
 		Mode:        "chatgpt",
 		DisplayName: "OpenAI ChatGPT subscription",
-		Description: "Uses ChatGPT account credentials for OpenAI Codex models.",
+		Description: "Uses ChatGPT account credentials for OpenAI Codex models. For local CLI/IDE use only.",
 		DocsURL:     "https://developers.openai.com/codex/auth",
 		ServerSafe:  false,
 	}
@@ -164,6 +164,7 @@ func (p *openAIChatGPTProvider) Stream(ctx context.Context, messages []provider.
 		defer close(ch)
 		defer func() { _ = resp.Body.Close() }()
 		scanner := bufio.NewScanner(resp.Body)
+		scanner.Buffer(make([]byte, 0, 64*1024), 4*1024*1024)
 		for scanner.Scan() {
 			line := strings.TrimSpace(scanner.Text())
 			if !strings.HasPrefix(line, "data:") {
