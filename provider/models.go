@@ -641,6 +641,7 @@ func bedrockModelListConfigFromRequest(req ModelListRequest) (bedrockModelListCo
 		if err := json.Unmarshal([]byte(req.APIKey), &secret); err != nil {
 			return bedrockModelListConfig{}, fmt.Errorf("anthropic_bedrock: parse credential JSON: %w", err)
 		}
+		cfg.SecretAccessKey = ""
 		if cfg.Region == "" {
 			cfg.Region = secret.Region
 		}

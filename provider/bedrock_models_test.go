@@ -92,4 +92,25 @@ func TestListModelsWithSettingsBedrockRequiresCredentials(t *testing.T) {
 	}
 }
 
+func TestBedrockModelListConfigFromJSONCredentials(t *testing.T) {
+	cfg, err := bedrockModelListConfigFromRequest(ModelListRequest{
+		APIKey: `{"region":"us-west-2","access_key_id":"AKIAEXAMPLE","secret_access_key":"secret","session_token":"token"}`,
+	})
+	if err != nil {
+		t.Fatalf("bedrockModelListConfigFromRequest: %v", err)
+	}
+	if cfg.Region != "us-west-2" {
+		t.Fatalf("Region = %q", cfg.Region)
+	}
+	if cfg.AccessKeyID != "AKIAEXAMPLE" {
+		t.Fatalf("AccessKeyID = %q", cfg.AccessKeyID)
+	}
+	if cfg.SecretAccessKey != "secret" {
+		t.Fatalf("SecretAccessKey = %q", cfg.SecretAccessKey)
+	}
+	if cfg.SessionToken != "token" {
+		t.Fatalf("SessionToken = %q", cfg.SessionToken)
+	}
+}
+
 func strPtr(s string) *string { return &s }
