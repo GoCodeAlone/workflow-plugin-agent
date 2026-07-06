@@ -86,16 +86,16 @@ var modelListers = map[string]ModelLister{
 		return listOpenAIModels(ctx, req.APIKey, baseURL)
 	},
 	"openai_azure": func(context.Context, ModelListRequest) ([]ModelInfo, error) {
-		return azureOpenAIFallbackModels(), nil
+		return nil, dynamicModelListingUnsupported("openai_azure")
 	},
 	"anthropic_bedrock": func(context.Context, ModelListRequest) ([]ModelInfo, error) {
-		return bedrockFallbackModels(), nil
+		return nil, dynamicModelListingUnsupported("anthropic_bedrock")
 	},
 	"anthropic_vertex": func(context.Context, ModelListRequest) ([]ModelInfo, error) {
-		return vertexFallbackModels(), nil
+		return nil, dynamicModelListingUnsupported("anthropic_vertex")
 	},
 	"anthropic_foundry": func(context.Context, ModelListRequest) ([]ModelInfo, error) {
-		return foundryFallbackModels(), nil
+		return nil, dynamicModelListingUnsupported("anthropic_foundry")
 	},
 	"gemini": func(ctx context.Context, req ModelListRequest) ([]ModelInfo, error) {
 		return listGeminiModels(ctx, req.APIKey)
@@ -433,7 +433,6 @@ func exchangeCopilotToken(ctx context.Context, oauthToken, tokenURL string) (str
 }
 
 // listCopilotModels calls the Copilot /models endpoint to retrieve available models.
-// Falls back to a curated list if the API call fails.
 func listCopilotModels(ctx context.Context, apiKey, baseURL string) ([]ModelInfo, error) {
 	if baseURL == "" {
 		baseURL = defaultCopilotBaseURL
@@ -442,12 +441,12 @@ func listCopilotModels(ctx context.Context, apiKey, baseURL string) ([]ModelInfo
 	// Exchange OAuth token for Copilot bearer token.
 	bearerToken, err := exchangeCopilotToken(ctx, apiKey, "")
 	if err != nil {
-		return copilotFallbackModels(), nil
+		return nil, err
 	}
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, baseURL+"/models", nil)
 	if err != nil {
-		return copilotFallbackModels(), nil
+		return nil, fmt.Errorf("copilot: create models request: %w", err)
 	}
 	req.Header.Set("Authorization", "Bearer "+bearerToken)
 	req.Header.Set("Copilot-Integration-Id", "vscode-chat")
@@ -456,17 +455,16 @@ func listCopilotModels(ctx context.Context, apiKey, baseURL string) ([]ModelInfo
 
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
-		return copilotFallbackModels(), nil
+		return nil, fmt.Errorf("copilot: models request failed: %w", err)
 	}
 	defer func() { _ = resp.Body.Close() }()
 
-	if resp.StatusCode != http.StatusOK {
-		return copilotFallbackModels(), nil
-	}
-
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return copilotFallbackModels(), nil
+		return nil, fmt.Errorf("copilot: read models response: %w", err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("copilot: models API error (status %d): %s", resp.StatusCode, truncate(string(body), 200))
 	}
 
 	var result struct {
@@ -476,7 +474,7 @@ func listCopilotModels(ctx context.Context, apiKey, baseURL string) ([]ModelInfo
 		} `json:"data"`
 	}
 	if err := json.Unmarshal(body, &result); err != nil {
-		return copilotFallbackModels(), nil
+		return nil, fmt.Errorf("copilot: parse models response: %w", err)
 	}
 
 	var models []ModelInfo
@@ -492,7 +490,7 @@ func listCopilotModels(ctx context.Context, apiKey, baseURL string) ([]ModelInfo
 	}
 
 	if len(models) == 0 {
-		return copilotFallbackModels(), nil
+		return nil, fmt.Errorf("copilot: models response did not include selectable models")
 	}
 
 	sort.Slice(models, func(i, j int) bool {
@@ -502,20 +500,10 @@ func listCopilotModels(ctx context.Context, apiKey, baseURL string) ([]ModelInfo
 	return models, nil
 }
 
-func copilotFallbackModels() []ModelInfo {
-	return []ModelInfo{
-		{ID: "claude-sonnet-4", Name: "Claude Sonnet 4"},
-		{ID: "gpt-4.1", Name: "GPT-4.1"},
-		{ID: "gpt-4o", Name: "GPT-4o"},
-		{ID: "gpt-4o-mini", Name: "GPT-4o Mini"},
-		{ID: "o3-mini", Name: "o3-mini"},
-	}
-}
-
 // listCohereModels calls the Cohere /v1/models endpoint.
 func listCohereModels(ctx context.Context, apiKey, baseURL string) ([]ModelInfo, error) {
 	if err := ValidateBaseURL(baseURL); err != nil {
-		return cohereFallbackModels(), nil
+		return nil, err
 	}
 	if baseURL == "" {
 		baseURL = defaultCohereBaseURL
@@ -523,23 +511,22 @@ func listCohereModels(ctx context.Context, apiKey, baseURL string) ([]ModelInfo,
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, baseURL+"/v1/models", nil)
 	if err != nil {
-		return cohereFallbackModels(), nil
+		return nil, fmt.Errorf("cohere: create models request: %w", err)
 	}
 	req.Header.Set("Authorization", "Bearer "+apiKey)
 
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
-		return cohereFallbackModels(), nil
+		return nil, fmt.Errorf("cohere: models request failed: %w", err)
 	}
 	defer func() { _ = resp.Body.Close() }()
 
-	if resp.StatusCode != http.StatusOK {
-		return cohereFallbackModels(), nil
-	}
-
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return cohereFallbackModels(), nil
+		return nil, fmt.Errorf("cohere: read models response: %w", err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("cohere: models API error (status %d): %s", resp.StatusCode, truncate(string(body), 200))
 	}
 
 	var result struct {
@@ -549,7 +536,7 @@ func listCohereModels(ctx context.Context, apiKey, baseURL string) ([]ModelInfo,
 		} `json:"models"`
 	}
 	if err := json.Unmarshal(body, &result); err != nil {
-		return cohereFallbackModels(), nil
+		return nil, fmt.Errorf("cohere: parse models response: %w", err)
 	}
 
 	var models []ModelInfo
@@ -572,7 +559,7 @@ func listCohereModels(ctx context.Context, apiKey, baseURL string) ([]ModelInfo,
 	}
 
 	if len(models) == 0 {
-		return cohereFallbackModels(), nil
+		return nil, fmt.Errorf("cohere: models response did not include selectable chat models")
 	}
 
 	sort.Slice(models, func(i, j int) bool {
@@ -582,59 +569,11 @@ func listCohereModels(ctx context.Context, apiKey, baseURL string) ([]ModelInfo,
 	return models, nil
 }
 
-func cohereFallbackModels() []ModelInfo {
-	return []ModelInfo{
-		{ID: "command-a-03-2025", Name: "Command A (March 2025)"},
-		{ID: "command-r", Name: "Command R"},
-		{ID: "command-r-plus", Name: "Command R+"},
-	}
-}
-
-func azureOpenAIFallbackModels() []ModelInfo {
-	return []ModelInfo{
-		{ID: "gpt-4o", Name: "GPT-4o"},
-		{ID: "gpt-4o-mini", Name: "GPT-4o Mini"},
-		{ID: "gpt-4.1", Name: "GPT-4.1"},
-		{ID: "gpt-4.1-mini", Name: "GPT-4.1 Mini"},
-		{ID: "o3-mini", Name: "o3-mini"},
-	}
-}
-
-func bedrockFallbackModels() []ModelInfo {
-	return []ModelInfo{
-		{ID: "anthropic.claude-opus-4-20250514-v1:0", Name: "Claude Opus 4"},
-		{ID: "anthropic.claude-sonnet-4-20250514-v1:0", Name: "Claude Sonnet 4"},
-		{ID: "anthropic.claude-haiku-4-20250514-v1:0", Name: "Claude Haiku 4"},
-		{ID: "anthropic.claude-3-5-sonnet-20241022-v2:0", Name: "Claude 3.5 Sonnet v2"},
-		{ID: "anthropic.claude-3-5-haiku-20241022-v1:0", Name: "Claude 3.5 Haiku"},
-	}
-}
-
-func vertexFallbackModels() []ModelInfo {
-	return []ModelInfo{
-		{ID: "claude-opus-4@20250514", Name: "Claude Opus 4"},
-		{ID: "claude-sonnet-4@20250514", Name: "Claude Sonnet 4"},
-		{ID: "claude-haiku-4@20250514", Name: "Claude Haiku 4"},
-		{ID: "claude-3-5-sonnet-v2@20241022", Name: "Claude 3.5 Sonnet v2"},
-		{ID: "claude-3-5-haiku@20241022", Name: "Claude 3.5 Haiku"},
-	}
-}
-
-func foundryFallbackModels() []ModelInfo {
-	return []ModelInfo{
-		{ID: "claude-opus-4-20250514", Name: "Claude Opus 4"},
-		{ID: "claude-sonnet-4-20250514", Name: "Claude Sonnet 4"},
-		{ID: "claude-haiku-4-20250514", Name: "Claude Haiku 4"},
-		{ID: "claude-3-5-sonnet-20241022-v2", Name: "Claude 3.5 Sonnet v2"},
-		{ID: "claude-3-5-haiku-20241022", Name: "Claude 3.5 Haiku"},
-	}
-}
-
 // listGeminiModels lists available Gemini models using the genai SDK.
 func listGeminiModels(ctx context.Context, apiKey string) ([]ModelInfo, error) {
 	client, err := genai.NewClient(ctx, googleoption.WithAPIKey(apiKey))
 	if err != nil {
-		return geminiFallbackModels(), nil
+		return nil, fmt.Errorf("gemini: create client: %w", err)
 	}
 	defer client.Close()
 
@@ -646,7 +585,7 @@ func listGeminiModels(ctx context.Context, apiKey string) ([]ModelInfo, error) {
 			break
 		}
 		if err != nil {
-			return geminiFallbackModels(), nil
+			return nil, fmt.Errorf("gemini: list models: %w", err)
 		}
 		models = append(models, ModelInfo{
 			ID:   m.Name,
@@ -654,19 +593,13 @@ func listGeminiModels(ctx context.Context, apiKey string) ([]ModelInfo, error) {
 		})
 	}
 	if len(models) == 0 {
-		return geminiFallbackModels(), nil
+		return nil, fmt.Errorf("gemini: models response did not include selectable models")
 	}
 	return models, nil
 }
 
-func geminiFallbackModels() []ModelInfo {
-	return []ModelInfo{
-		{ID: "gemini-2.5-pro-preview-03-25", Name: "Gemini 2.5 Pro Preview"},
-		{ID: "gemini-2.0-flash", Name: "Gemini 2.0 Flash"},
-		{ID: "gemini-2.0-flash-lite", Name: "Gemini 2.0 Flash-Lite"},
-		{ID: "gemini-1.5-pro", Name: "Gemini 1.5 Pro"},
-		{ID: "gemini-1.5-flash", Name: "Gemini 1.5 Flash"},
-	}
+func dynamicModelListingUnsupported(providerType string) error {
+	return fmt.Errorf("%s: dynamic model listing is not implemented for this provider; specify a custom model ID", providerType)
 }
 
 // listOllamaModels lists models available on a local Ollama server.
