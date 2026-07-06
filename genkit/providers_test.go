@@ -74,7 +74,7 @@ func TestNewAzureOpenAIProvider_MissingCredentials(t *testing.T) {
 }
 
 func TestNewBedrockProvider_MissingKey(t *testing.T) {
-	_, err := NewBedrockProvider(context.Background(), "us-east-1", "anthropic.claude-sonnet-4", "", "", "", "", 4096)
+	_, err := NewBedrockProvider(context.Background(), "bedrock", "us-east-1", "anthropic.claude-sonnet-4", "", "", "", "", 4096)
 	if err == nil {
 		t.Error("expected error for missing secret key")
 	}

@@ -76,6 +76,29 @@ var modelListers = map[string]ModelLister{
 	"openai": func(ctx context.Context, req ModelListRequest) ([]ModelInfo, error) {
 		return listOpenAIModels(ctx, req.APIKey, req.BaseURL)
 	},
+	"openai_compatible": func(ctx context.Context, req ModelListRequest) ([]ModelInfo, error) {
+		if err := requireBaseURL("openai_compatible", req.BaseURL); err != nil {
+			return nil, err
+		}
+		return listOpenAIModels(ctx, req.APIKey, req.BaseURL)
+	},
+	"anthropic_compatible": func(ctx context.Context, req ModelListRequest) ([]ModelInfo, error) {
+		if err := requireBaseURL("anthropic_compatible", req.BaseURL); err != nil {
+			return nil, err
+		}
+		return listAnthropicModels(ctx, req.APIKey, req.BaseURL)
+	},
+	"custom": func(ctx context.Context, req ModelListRequest) ([]ModelInfo, error) {
+		if err := requireBaseURL("custom", req.BaseURL); err != nil {
+			return nil, err
+		}
+		switch apiCompatibility(req.Settings) {
+		case "anthropic":
+			return listAnthropicModels(ctx, req.APIKey, req.BaseURL)
+		default:
+			return listOpenAIModels(ctx, req.APIKey, req.BaseURL)
+		}
+	},
 	"openai_chatgpt": func(ctx context.Context, req ModelListRequest) ([]ModelInfo, error) {
 		return listOpenAIChatGPTModels(ctx, req.APIKey, req.BaseURL)
 	},
@@ -102,6 +125,9 @@ var modelListers = map[string]ModelLister{
 	"anthropic_bedrock": func(ctx context.Context, req ModelListRequest) ([]ModelInfo, error) {
 		return listBedrockModels(ctx, req)
 	},
+	"bedrock": func(ctx context.Context, req ModelListRequest) ([]ModelInfo, error) {
+		return listBedrockModels(ctx, req)
+	},
 	"anthropic_vertex": func(context.Context, ModelListRequest) ([]ModelInfo, error) {
 		return nil, dynamicModelListingUnsupported("anthropic_vertex")
 	},
@@ -123,6 +149,25 @@ var modelListers = map[string]ModelLister{
 	"mock": func(context.Context, ModelListRequest) ([]ModelInfo, error) {
 		return []ModelInfo{{ID: "mock-default", Name: "Mock Provider"}}, nil
 	},
+}
+
+func requireBaseURL(providerType, baseURL string) error {
+	if strings.TrimSpace(baseURL) == "" {
+		return fmt.Errorf("%s: base_url is required", providerType)
+	}
+	return nil
+}
+
+func apiCompatibility(settings map[string]string) string {
+	if settings == nil {
+		return "openai"
+	}
+	switch strings.ToLower(strings.TrimSpace(settings["api_compat"])) {
+	case "anthropic", "anthropic_compatible":
+		return "anthropic"
+	default:
+		return "openai"
+	}
 }
 
 // listAnthropicModels calls the Anthropic /v1/models endpoint.
@@ -229,21 +274,8 @@ func listOpenAIModels(ctx context.Context, apiKey, baseURL string) ([]ModelInfo,
 		return nil, fmt.Errorf("parse response: %w", err)
 	}
 
-	// Filter to chat-capable models
-	chatPrefixes := []string{"gpt-4", "gpt-3.5", "o1", "o3", "chatgpt"}
 	var models []ModelInfo
 	for _, m := range result.Data {
-		isChatModel := false
-		lower := strings.ToLower(m.ID)
-		for _, prefix := range chatPrefixes {
-			if strings.HasPrefix(lower, prefix) {
-				isChatModel = true
-				break
-			}
-		}
-		if !isChatModel {
-			continue
-		}
 		models = append(models, ModelInfo{
 			ID:   m.ID,
 			Name: m.ID,
@@ -694,20 +726,16 @@ func listBedrockModels(ctx context.Context, req ModelListRequest) ([]ModelInfo, 
 
 func listBedrockModelsFromAPI(ctx context.Context, api bedrockFoundationModelLister) ([]ModelInfo, error) {
 	out, err := api.ListFoundationModels(ctx, &awsbedrock.ListFoundationModelsInput{
-		ByProvider:       aws.String("Anthropic"),
 		ByOutputModality: bedrocktypes.ModelModalityText,
 		ByInferenceType:  bedrocktypes.InferenceTypeOnDemand,
 	})
 	if err != nil {
-		return nil, fmt.Errorf("anthropic_bedrock: list foundation models: %w", err)
+		return nil, fmt.Errorf("bedrock: list foundation models: %w", err)
 	}
 	models := make([]ModelInfo, 0, len(out.ModelSummaries))
 	for _, summary := range out.ModelSummaries {
 		id := strings.TrimSpace(aws.ToString(summary.ModelId))
 		if id == "" {
-			continue
-		}
-		if providerName := strings.TrimSpace(aws.ToString(summary.ProviderName)); providerName != "" && !strings.EqualFold(providerName, "Anthropic") {
 			continue
 		}
 		if len(summary.OutputModalities) > 0 && !modelModalitiesContain(summary.OutputModalities, bedrocktypes.ModelModalityText) {
@@ -727,7 +755,7 @@ func listBedrockModelsFromAPI(ctx context.Context, api bedrockFoundationModelLis
 		models = append(models, ModelInfo{ID: id, Name: name})
 	}
 	if len(models) == 0 {
-		return nil, fmt.Errorf("anthropic_bedrock: no selectable Anthropic text models returned")
+		return nil, fmt.Errorf("bedrock: no selectable text models returned")
 	}
 	sort.Slice(models, func(i, j int) bool {
 		return models[i].ID < models[j].ID

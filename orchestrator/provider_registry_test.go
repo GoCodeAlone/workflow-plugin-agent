@@ -287,13 +287,18 @@ func TestProviderRegistryNewProviderTypes(t *testing.T) {
 		typ      string
 		settings string
 		secret   string
+		baseURL  string
 		wantName string
 	}{
-		{"copilot_models", "copilot_models", "{}", "test-secret", "copilot_models"},
-		{"openai_chatgpt", "openai_chatgpt", "{}", `{"access_token":"token","refresh_token":"refresh","account_id":"acct"}`, "openai_chatgpt"},
-		{"openai_azure", "openai_azure", `{"resource":"myres","deployment_name":"gpt4"}`, "test-secret", "openai_azure"},
-		{"anthropic_foundry", "anthropic_foundry", `{"resource":"myres"}`, "test-secret", "anthropic_foundry"},
-		{"anthropic_bedrock", "anthropic_bedrock", `{"region":"us-east-1","access_key_id":"AKID"}`, "test-secret", "anthropic_bedrock"},
+		{"copilot_models", "copilot_models", "{}", "test-secret", "", "copilot_models"},
+		{"openai_chatgpt", "openai_chatgpt", "{}", `{"access_token":"token","refresh_token":"refresh","account_id":"acct"}`, "", "openai_chatgpt"},
+		{"openai_compatible", "openai_compatible", "{}", "test-secret", "https://example.com/v1", "openai_compatible"},
+		{"anthropic_compatible", "anthropic_compatible", "{}", "test-secret", "https://example.com", "anthropic_compatible"},
+		{"custom", "custom", `{"api_compat":"anthropic"}`, "test-secret", "https://example.com", "custom"},
+		{"openai_azure", "openai_azure", `{"resource":"myres","deployment_name":"gpt4"}`, "test-secret", "", "openai_azure"},
+		{"anthropic_foundry", "anthropic_foundry", `{"resource":"myres"}`, "test-secret", "", "anthropic_foundry"},
+		{"bedrock", "bedrock", `{"region":"us-east-1","access_key_id":"AKID"}`, "test-secret", "", "bedrock"},
+		{"anthropic_bedrock", "anthropic_bedrock", `{"region":"us-east-1","access_key_id":"AKID"}`, "test-secret", "", "anthropic_bedrock"},
 	}
 	// Note: anthropic_vertex requires valid GCP credentials JSON or ADC and is tested separately.
 
@@ -304,9 +309,9 @@ func TestProviderRegistryNewProviderTypes(t *testing.T) {
 				"TEST_KEY": tt.secret,
 			}}
 
-			_, err := db.Exec(`INSERT INTO llm_providers (id, alias, type, model, secret_name, settings)
-				VALUES (?, ?, ?, 'test-model', 'TEST_KEY', ?)`,
-				tt.name, tt.name, tt.typ, tt.settings)
+			_, err := db.Exec(`INSERT INTO llm_providers (id, alias, type, model, secret_name, base_url, settings)
+				VALUES (?, ?, ?, 'test-model', 'TEST_KEY', ?, ?)`,
+				tt.name, tt.name, tt.typ, tt.baseURL, tt.settings)
 			if err != nil {
 				t.Fatalf("insert: %v", err)
 			}
