@@ -28,8 +28,8 @@ func TestAllAuthModesIncludesOpenAIChatGPT(t *testing.T) {
 
 func TestListModelsOpenAIChatGPTFetchesLiveCodexCatalog(t *testing.T) {
 	var sawURL, sawAuth, sawAccount string
-	origClient := http.DefaultClient
-	http.DefaultClient = &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+	origClient := modelHTTPClient
+	modelHTTPClient = &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
 		sawURL = r.URL.String()
 		sawAuth = r.Header.Get("Authorization")
 		sawAccount = r.Header.Get("ChatGPT-Account-ID")
@@ -46,7 +46,7 @@ func TestListModelsOpenAIChatGPTFetchesLiveCodexCatalog(t *testing.T) {
 		}`)),
 		}, nil
 	})}
-	t.Cleanup(func() { http.DefaultClient = origClient })
+	t.Cleanup(func() { modelHTTPClient = origClient })
 
 	tokenBundle := openAIChatGPTTokenBundleJSON(t, "access-token", "refresh-token", "acct_123")
 	models, err := ListModels(t.Context(), "openai_chatgpt", tokenBundle, "")
@@ -93,15 +93,15 @@ func TestListModelsOpenAIChatGPTRequiresAccessToken(t *testing.T) {
 
 func TestListModelsOpenAIChatGPTAcceptsNestedCodexAuthJSON(t *testing.T) {
 	var sawAuth string
-	origClient := http.DefaultClient
-	http.DefaultClient = &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+	origClient := modelHTTPClient
+	modelHTTPClient = &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
 		sawAuth = r.Header.Get("Authorization")
 		return &http.Response{
 			StatusCode: http.StatusOK,
 			Body:       io.NopCloser(bytes.NewBufferString(`{"models":[{"slug":"gpt-5.5"}]}`)),
 		}, nil
 	})}
-	t.Cleanup(func() { http.DefaultClient = origClient })
+	t.Cleanup(func() { modelHTTPClient = origClient })
 
 	models, err := ListModels(t.Context(), "openai_chatgpt", `{"tokens":{"access_token":"nested-token","refresh_token":"refresh-token"}}`, "")
 	if err != nil {
@@ -117,15 +117,15 @@ func TestListModelsOpenAIChatGPTAcceptsNestedCodexAuthJSON(t *testing.T) {
 
 func TestListModelsOpenAIChatGPTUsesAccountIDFromNestedIDToken(t *testing.T) {
 	var sawAccount string
-	origClient := http.DefaultClient
-	http.DefaultClient = &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+	origClient := modelHTTPClient
+	modelHTTPClient = &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
 		sawAccount = r.Header.Get("ChatGPT-Account-ID")
 		return &http.Response{
 			StatusCode: http.StatusOK,
 			Body:       io.NopCloser(bytes.NewBufferString(`{"models":[{"slug":"gpt-5.5"}]}`)),
 		}, nil
 	})}
-	t.Cleanup(func() { http.DefaultClient = origClient })
+	t.Cleanup(func() { modelHTTPClient = origClient })
 
 	idToken := unsignedModelJWT(t, map[string]any{
 		"https://api.openai.com/auth": map[string]any{"chatgpt_account_id": "acct_from_claim"},

@@ -42,6 +42,8 @@ const (
 	defaultCohereBaseURL    = "https://api.cohere.com"
 )
 
+var modelHTTPClient = http.DefaultClient
+
 // copilotTokenResponse is the response from the Copilot token exchange endpoint.
 type copilotTokenResponse struct {
 	Token     string `json:"token"`
@@ -130,7 +132,7 @@ func listAnthropicModels(ctx context.Context, apiKey, baseURL string) ([]ModelIn
 	req.Header.Set("x-api-key", apiKey)
 	req.Header.Set("anthropic-version", anthropicAPIVersion)
 
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := modelHTTPClient.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("request failed: %w", err)
 	}
@@ -193,7 +195,7 @@ func listOpenAIModels(ctx context.Context, apiKey, baseURL string) ([]ModelInfo,
 	}
 	req.Header.Set("Authorization", "Bearer "+apiKey)
 
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := modelHTTPClient.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("request failed: %w", err)
 	}
@@ -268,7 +270,7 @@ func listOpenAIChatGPTModels(ctx context.Context, tokenJSON, baseURL string) ([]
 		req.Header.Set("ChatGPT-Account-ID", accountID)
 	}
 
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := modelHTTPClient.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("openai_chatgpt: models request failed: %w", err)
 	}
@@ -409,7 +411,7 @@ func exchangeCopilotToken(ctx context.Context, oauthToken, tokenURL string) (str
 	req.Header.Set("Authorization", "Token "+oauthToken)
 	req.Header.Set("Accept", "application/json")
 
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := modelHTTPClient.Do(req)
 	if err != nil {
 		return "", fmt.Errorf("copilot: token exchange request: %w", err)
 	}
@@ -453,7 +455,7 @@ func listCopilotModels(ctx context.Context, apiKey, baseURL string) ([]ModelInfo
 	req.Header.Set("Editor-Version", "vscode/1.100.0")
 	req.Header.Set("Editor-Plugin-Version", copilotEditorVersion)
 
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := modelHTTPClient.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("copilot: models request failed: %w", err)
 	}
@@ -515,7 +517,7 @@ func listCohereModels(ctx context.Context, apiKey, baseURL string) ([]ModelInfo,
 	}
 	req.Header.Set("Authorization", "Bearer "+apiKey)
 
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := modelHTTPClient.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("cohere: models request failed: %w", err)
 	}

@@ -6,7 +6,7 @@ import (
 	"testing"
 )
 
-func TestListModelsHostedAnthropicVariantsRequireDynamicCatalog(t *testing.T) {
+func TestListModelsHostedProviderVariantsRequireDynamicCatalog(t *testing.T) {
 	for _, providerType := range []string{"openai_azure", "anthropic_bedrock", "anthropic_vertex", "anthropic_foundry"} {
 		t.Run(providerType, func(t *testing.T) {
 			_, err := ListModels(context.Background(), providerType, "", "")
