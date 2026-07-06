@@ -2,6 +2,7 @@ package provider
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -327,16 +328,20 @@ func listOpenAIChatGPTModels(ctx context.Context, tokenJSON, baseURL string) ([]
 	if len(models) == 0 {
 		return nil, fmt.Errorf("openai_chatgpt: models response did not include selectable models")
 	}
+	// ChatGPT returns the same picker order used by Codex/OpenClaw. Preserve it
+	// so the default selection follows the account-visible catalog ordering.
 	return models, nil
 }
 
 func parseOpenAIChatGPTModelToken(raw string) (accessToken, accountID string, err error) {
 	var wrapper struct {
 		AccessToken      string `json:"access_token"`
+		IDToken          string `json:"id_token"`
 		AccountID        string `json:"account_id"`
 		ChatGPTAccountID string `json:"chatgpt_account_id"`
 		Tokens           *struct {
 			AccessToken      string `json:"access_token"`
+			IDToken          string `json:"id_token"`
 			AccountID        string `json:"account_id"`
 			ChatGPTAccountID string `json:"chatgpt_account_id"`
 		} `json:"tokens"`
@@ -346,6 +351,7 @@ func parseOpenAIChatGPTModelToken(raw string) (accessToken, accountID string, er
 	}
 	if wrapper.Tokens != nil {
 		wrapper.AccessToken = wrapper.Tokens.AccessToken
+		wrapper.IDToken = wrapper.Tokens.IDToken
 		wrapper.AccountID = wrapper.Tokens.AccountID
 		wrapper.ChatGPTAccountID = wrapper.Tokens.ChatGPTAccountID
 	}
@@ -357,7 +363,38 @@ func parseOpenAIChatGPTModelToken(raw string) (accessToken, accountID string, er
 	if accountID == "" {
 		accountID = strings.TrimSpace(wrapper.AccountID)
 	}
+	if claimAccountID := openAIChatGPTAccountIDFromIDToken(wrapper.IDToken); claimAccountID != "" {
+		accountID = claimAccountID
+	}
 	return accessToken, accountID, nil
+}
+
+func openAIChatGPTAccountIDFromIDToken(idToken string) string {
+	var claims map[string]any
+	if !decodeModelJWTPayload(idToken, &claims) {
+		return ""
+	}
+	auth, _ := claims["https://api.openai.com/auth"].(map[string]any)
+	if auth == nil {
+		return ""
+	}
+	accountID, _ := auth["chatgpt_account_id"].(string)
+	return strings.TrimSpace(accountID)
+}
+
+func decodeModelJWTPayload(token string, out any) bool {
+	parts := strings.Split(token, ".")
+	if len(parts) < 2 {
+		return false
+	}
+	payload, err := base64.RawURLEncoding.DecodeString(parts[1])
+	if err != nil {
+		payload, err = base64.URLEncoding.DecodeString(parts[1])
+		if err != nil {
+			return false
+		}
+	}
+	return json.Unmarshal(payload, out) == nil
 }
 
 // exchangeCopilotToken exchanges a GitHub OAuth token for a Copilot bearer token.

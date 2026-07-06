@@ -2,6 +2,7 @@ package provider
 
 import (
 	"bytes"
+	"encoding/base64"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -61,7 +62,11 @@ func TestListModelsOpenAIChatGPTFetchesLiveCodexCatalog(t *testing.T) {
 	if sawAccount != "acct_123" {
 		t.Fatalf("ChatGPT-Account-ID = %q", sawAccount)
 	}
-	if len(models) != 2 || models[0].ID != "gpt-5.5" || models[1].ID != "gpt-5.4-mini" {
+	gotIDs := map[string]bool{}
+	for _, m := range models {
+		gotIDs[m.ID] = true
+	}
+	if len(gotIDs) != 2 || !gotIDs["gpt-5.5"] || !gotIDs["gpt-5.4-mini"] {
 		t.Fatalf("models = %+v", models)
 	}
 }
@@ -110,6 +115,33 @@ func TestListModelsOpenAIChatGPTAcceptsNestedCodexAuthJSON(t *testing.T) {
 	}
 }
 
+func TestListModelsOpenAIChatGPTUsesAccountIDFromNestedIDToken(t *testing.T) {
+	var sawAccount string
+	origClient := http.DefaultClient
+	http.DefaultClient = &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		sawAccount = r.Header.Get("ChatGPT-Account-ID")
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Body:       io.NopCloser(bytes.NewBufferString(`{"models":[{"slug":"gpt-5.5"}]}`)),
+		}, nil
+	})}
+	t.Cleanup(func() { http.DefaultClient = origClient })
+
+	idToken := unsignedModelJWT(t, map[string]any{
+		"https://api.openai.com/auth": map[string]any{"chatgpt_account_id": "acct_from_claim"},
+	})
+	models, err := ListModels(t.Context(), "openai_chatgpt", `{"tokens":{"access_token":"nested-token","id_token":`+mustJSONQuote(t, idToken)+`,"account_id":"acct_from_file"}}`, "")
+	if err != nil {
+		t.Fatalf("ListModels: %v", err)
+	}
+	if sawAccount != "acct_from_claim" {
+		t.Fatalf("ChatGPT-Account-ID = %q", sawAccount)
+	}
+	if len(models) != 1 || models[0].ID != "gpt-5.5" {
+		t.Fatalf("models = %+v", models)
+	}
+}
+
 func openAIChatGPTTokenBundleJSON(t *testing.T, access, refresh, account string) string {
 	t.Helper()
 	raw, err := json.Marshal(struct {
@@ -125,6 +157,25 @@ func openAIChatGPTTokenBundleJSON(t *testing.T, access, refresh, account string)
 	})
 	if err != nil {
 		t.Fatalf("marshal token bundle: %v", err)
+	}
+	return string(raw)
+}
+
+func unsignedModelJWT(t *testing.T, claims map[string]any) string {
+	t.Helper()
+	header := base64.RawURLEncoding.EncodeToString([]byte(`{"alg":"none","typ":"JWT"}`))
+	payload, err := json.Marshal(claims)
+	if err != nil {
+		t.Fatalf("marshal claims: %v", err)
+	}
+	return header + "." + base64.RawURLEncoding.EncodeToString(payload) + "."
+}
+
+func mustJSONQuote(t *testing.T, s string) string {
+	t.Helper()
+	raw, err := json.Marshal(s)
+	if err != nil {
+		t.Fatalf("quote string: %v", err)
 	}
 	return string(raw)
 }
