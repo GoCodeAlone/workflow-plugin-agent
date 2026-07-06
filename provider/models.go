@@ -46,6 +46,8 @@ func ListModels(ctx context.Context, providerType, apiKey, baseURL string) ([]Mo
 		return listAnthropicModels(ctx, apiKey, baseURL)
 	case "openai":
 		return listOpenAIModels(ctx, apiKey, baseURL)
+	case "openai_chatgpt":
+		return openAIChatGPTModels(), nil
 	case "openrouter":
 		if baseURL == "" {
 			baseURL = "https://openrouter.ai/api/v1"
@@ -407,6 +409,12 @@ func cohereFallbackModels() []ModelInfo {
 		{ID: "command-a-03-2025", Name: "Command A (March 2025)"},
 		{ID: "command-r", Name: "Command R"},
 		{ID: "command-r-plus", Name: "Command R+"},
+	}
+}
+
+func openAIChatGPTModels() []ModelInfo {
+	return []ModelInfo{
+		{ID: "gpt-5-codex", Name: "GPT-5 Codex"},
 	}
 }
 
