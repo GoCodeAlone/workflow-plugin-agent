@@ -3,6 +3,7 @@ package orchestrator
 import (
 	"context"
 	"database/sql"
+	"slices"
 	"testing"
 
 	"github.com/GoCodeAlone/workflow-plugin-agent/provider"
@@ -325,6 +326,39 @@ func TestProviderRegistryNewProviderTypes(t *testing.T) {
 				t.Errorf("expected %q provider, got %q", tt.wantName, p.Name())
 			}
 		})
+	}
+}
+
+func TestProviderRegistryProviderTypesSortedDefensiveCopy(t *testing.T) {
+	reg := NewProviderRegistry(nil, nil)
+	want := []string{
+		"mock", "anthropic", "openai", "openai_compatible",
+		"anthropic_compatible", "custom", "openai_chatgpt", "openrouter",
+		"copilot", "cohere", "copilot_models", "openai_azure",
+		"anthropic_foundry", "anthropic_vertex", "bedrock", "anthropic_bedrock",
+		"gemini", "ollama", "llama_cpp", "claude_code", "copilot_cli",
+		"codex_cli", "gemini_cli", "cursor_cli",
+	}
+	slices.Sort(want)
+
+	got := reg.ProviderTypes()
+	if !slices.Equal(got, want) {
+		t.Fatalf("ProviderTypes() = %v, want %v", got, want)
+	}
+	if !slices.IsSorted(got) {
+		t.Fatalf("ProviderTypes() is not sorted: %v", got)
+	}
+
+	got[0] = "mutated"
+	if next := reg.ProviderTypes(); !slices.Equal(next, want) {
+		t.Fatalf("ProviderTypes() returned shared state: %v", next)
+	}
+
+	reg.mu.Lock()
+	reg.factories["zzz_test"] = nil
+	reg.mu.Unlock()
+	if next := reg.ProviderTypes(); len(next) != len(want)+1 || next[len(next)-1] != "zzz_test" {
+		t.Fatalf("ProviderTypes() did not reflect registered factory: %v", next)
 	}
 }
 
