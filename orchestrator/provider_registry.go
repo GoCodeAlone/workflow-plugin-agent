@@ -114,11 +114,11 @@ func NewProviderRegistry(db *sql.DB, secretsProvider func() secrets.Provider) *P
 // ProviderTypes returns the registered provider type names in sorted order.
 func (r *ProviderRegistry) ProviderTypes() []string {
 	r.mu.RLock()
-	defer r.mu.RUnlock()
 	types := make([]string, 0, len(r.factories))
 	for providerType := range r.factories {
 		types = append(types, providerType)
 	}
+	r.mu.RUnlock()
 	slices.Sort(types)
 	return types
 }
