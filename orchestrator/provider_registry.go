@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -108,6 +109,18 @@ func NewProviderRegistry(db *sql.DB, secretsProvider func() secrets.Provider) *P
 	r.factories["cursor_cli"] = cursorCLIProviderFactory
 
 	return r
+}
+
+// ProviderTypes returns the registered provider type names in sorted order.
+func (r *ProviderRegistry) ProviderTypes() []string {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	types := make([]string, 0, len(r.factories))
+	for providerType := range r.factories {
+		types = append(types, providerType)
+	}
+	slices.Sort(types)
+	return types
 }
 
 // GetByAlias looks up a provider by its alias. It checks the cache first,
