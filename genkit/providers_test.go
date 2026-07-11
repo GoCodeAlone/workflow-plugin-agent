@@ -3,6 +3,7 @@ package genkit
 import (
 	"context"
 	"encoding/json"
+	"mime"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -10,6 +11,7 @@ import (
 
 	"github.com/GoCodeAlone/workflow-plugin-agent/provider"
 	ollamaPlugin "github.com/firebase/genkit/go/plugins/ollama"
+	"github.com/openai/openai-go"
 )
 
 func TestNewAnthropicProvider_MissingKey(t *testing.T) {
@@ -56,6 +58,128 @@ func TestNewOpenAICompatibleProvider_NoKey(t *testing.T) {
 	}
 	if p == nil {
 		t.Fatal("expected non-nil provider")
+	}
+}
+
+func TestOpenAICompatibleProvider_MaxTokensUsesNativeConfig(t *testing.T) {
+	var requestBody struct {
+		Model    string `json:"model"`
+		Messages []struct {
+			Role    string `json:"role"`
+			Content []struct {
+				Type string `json:"type"`
+				Text string `json:"text"`
+			} `json:"content"`
+		} `json:"messages"`
+		MaxTokens           *int `json:"max_tokens"`
+		MaxCompletionTokens *int `json:"max_completion_tokens"`
+	}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost || r.URL.Path != "/v1/chat/completions" {
+			http.Error(w, "unexpected request target", http.StatusNotFound)
+			t.Errorf("request target = %s %s", r.Method, r.URL.Path)
+			return
+		}
+		if got := r.Header.Get("Authorization"); got != "Bearer key" {
+			http.Error(w, "unexpected authorization", http.StatusUnauthorized)
+			t.Errorf("authorization header = %q", got)
+			return
+		}
+		contentType := r.Header.Get("Content-Type")
+		mediaType, _, err := mime.ParseMediaType(contentType)
+		if err != nil || mediaType != "application/json" {
+			http.Error(w, "unexpected content type", http.StatusUnsupportedMediaType)
+			t.Errorf("content type = %q, parse error: %v", contentType, err)
+			return
+		}
+		if err := json.NewDecoder(r.Body).Decode(&requestBody); err != nil {
+			http.Error(w, "invalid JSON", http.StatusBadRequest)
+			t.Errorf("decode request body: %v", err)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		if _, err := w.Write([]byte(`{"id":"chatcmpl-test","object":"chat.completion","model":"fixture-model","choices":[{"index":0,"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}],"usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2}}`)); err != nil {
+			t.Errorf("write response: %v", err)
+		}
+	}))
+	t.Cleanup(server.Close)
+
+	p, err := NewOpenAICompatibleProvider(t.Context(), "test", "key", "fixture-model", server.URL+"/v1", 321)
+	if err != nil {
+		t.Fatalf("create provider: %v", err)
+	}
+	response, err := p.Chat(t.Context(), []provider.Message{{Role: provider.RoleUser, Content: "ping"}}, nil)
+	if err != nil {
+		t.Fatalf("chat: %v", err)
+	}
+	if response.Content != "ok" {
+		t.Fatalf("response content = %q, want ok", response.Content)
+	}
+	if requestBody.Model != "fixture-model" {
+		t.Fatalf("model = %q, want fixture-model", requestBody.Model)
+	}
+	if len(requestBody.Messages) != 1 {
+		t.Fatalf("messages = %#v, want one message", requestBody.Messages)
+	}
+	message := requestBody.Messages[0]
+	if message.Role != "user" || len(message.Content) != 1 || message.Content[0].Type != "text" || message.Content[0].Text != "ping" {
+		t.Fatalf("message = %#v, want one user text part containing ping", message)
+	}
+	if requestBody.MaxTokens == nil || *requestBody.MaxTokens != 321 {
+		t.Fatalf("max_tokens = %v, want 321", requestBody.MaxTokens)
+	}
+	if requestBody.MaxCompletionTokens != nil {
+		t.Fatal("generic compatible request unexpectedly contains max_completion_tokens")
+	}
+}
+
+func TestOpenAIAdapterConstructorsUseNativeTokenLimitConfig(t *testing.T) {
+	tests := []struct {
+		name                string
+		new                 func() (provider.Provider, error)
+		wantMaxTokens       bool
+		wantCompletionLimit bool
+	}{
+		{name: "openai", new: func() (provider.Provider, error) {
+			return NewOpenAIProvider(t.Context(), "key", "gpt-4.1", "", 321)
+		}, wantCompletionLimit: true},
+		{name: "openai reasoning", new: func() (provider.Provider, error) {
+			return NewOpenAIProvider(t.Context(), "key", "o3", "", 321)
+		}, wantCompletionLimit: true},
+		{name: "compatible", new: func() (provider.Provider, error) {
+			return NewOpenAICompatibleProvider(t.Context(), "test", "key", "model", "http://localhost", 321)
+		}, wantMaxTokens: true},
+		{name: "azure", new: func() (provider.Provider, error) {
+			return NewAzureOpenAIProvider(t.Context(), "resource", "deployment", "2024-10-21", "key", "", 321)
+		}, wantCompletionLimit: true},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			p, err := test.new()
+			if err != nil {
+				t.Fatalf("create provider: %v", err)
+			}
+			gp, ok := p.(*genkitProvider)
+			if !ok {
+				t.Fatalf("provider type = %T, want *genkitProvider", p)
+			}
+			config, ok := gp.customConfig.(*openai.ChatCompletionNewParams)
+			if !ok {
+				t.Fatalf("custom config type = %T, want *openai.ChatCompletionNewParams", gp.customConfig)
+			}
+			if config.MaxTokens.Valid() != test.wantMaxTokens {
+				t.Fatalf("max tokens valid = %t, want %t", config.MaxTokens.Valid(), test.wantMaxTokens)
+			}
+			if config.MaxTokens.Valid() && config.MaxTokens.Value != 321 {
+				t.Fatalf("max tokens = %d, want 321", config.MaxTokens.Value)
+			}
+			if config.MaxCompletionTokens.Valid() != test.wantCompletionLimit {
+				t.Fatalf("max completion tokens valid = %t, want %t", config.MaxCompletionTokens.Valid(), test.wantCompletionLimit)
+			}
+			if config.MaxCompletionTokens.Valid() && config.MaxCompletionTokens.Value != 321 {
+				t.Fatalf("max completion tokens = %d, want 321", config.MaxCompletionTokens.Value)
+			}
+		})
 	}
 }
 

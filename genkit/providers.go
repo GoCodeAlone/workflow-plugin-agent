@@ -15,6 +15,7 @@ import (
 	openaiPlugin "github.com/firebase/genkit/go/plugins/compat_oai/openai"
 	"github.com/firebase/genkit/go/plugins/googlegenai"
 	ollamaPlugin "github.com/firebase/genkit/go/plugins/ollama"
+	"github.com/openai/openai-go"
 	"github.com/openai/openai-go/option"
 )
 
@@ -88,10 +89,11 @@ func NewOpenAIProvider(ctx context.Context, apiKey, model, baseURL string, maxTo
 	p := &openaiPlugin.OpenAI{APIKey: apiKey, Opts: extraOpts}
 	g := initGenkitWithPlugin(ctx, gk.WithPlugins(p))
 	return &genkitProvider{
-		g:         g,
-		modelName: "openai/" + model,
-		name:      "openai",
-		maxTokens: maxTokens,
+		g:            g,
+		modelName:    "openai/" + model,
+		name:         "openai",
+		maxTokens:    maxTokens,
+		customConfig: openAIGenerationConfig(maxTokens),
 		authInfo: provider.AuthModeInfo{
 			Mode:        "api_key",
 			DisplayName: "OpenAI",
@@ -195,10 +197,11 @@ func NewOpenAICompatibleProvider(ctx context.Context, providerName, apiKey, mode
 	}
 	g := initGenkitWithPlugin(ctx, gk.WithPlugins(p))
 	return &genkitProvider{
-		g:         g,
-		modelName: providerName + "/" + model,
-		name:      providerName,
-		maxTokens: maxTokens,
+		g:            g,
+		modelName:    providerName + "/" + model,
+		name:         providerName,
+		maxTokens:    maxTokens,
+		customConfig: openAICompatibleGenerationConfig(maxTokens),
 		authInfo: provider.AuthModeInfo{
 			Mode:        "api_key",
 			DisplayName: providerName,
@@ -236,16 +239,31 @@ func NewAzureOpenAIProvider(ctx context.Context, resource, deploymentName, apiVe
 	p := &openaiPlugin.OpenAI{APIKey: "azure-placeholder", Opts: opts}
 	g := initGenkitWithPlugin(ctx, gk.WithPlugins(p))
 	return &genkitProvider{
-		g:         g,
-		modelName: "openai/" + deploymentName,
-		name:      "openai_azure",
-		maxTokens: maxTokens,
+		g:            g,
+		modelName:    "openai/" + deploymentName,
+		name:         "openai_azure",
+		maxTokens:    maxTokens,
+		customConfig: openAIGenerationConfig(maxTokens),
 		authInfo: provider.AuthModeInfo{
 			Mode:        "azure",
 			DisplayName: "OpenAI (Azure OpenAI Service)",
 			ServerSafe:  true,
 		},
 	}, nil
+}
+
+func openAIGenerationConfig(maxTokens int) any {
+	if maxTokens <= 0 {
+		return nil
+	}
+	return &openai.ChatCompletionNewParams{MaxCompletionTokens: openai.Int(int64(maxTokens))}
+}
+
+func openAICompatibleGenerationConfig(maxTokens int) any {
+	if maxTokens <= 0 {
+		return nil
+	}
+	return &openai.ChatCompletionNewParams{MaxTokens: openai.Int(int64(maxTokens))}
 }
 
 // NewAnthropicFoundryProvider creates a provider for Anthropic on Azure AI Foundry.
