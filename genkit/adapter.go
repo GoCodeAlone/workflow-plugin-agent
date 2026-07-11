@@ -12,16 +12,16 @@ import (
 
 // genkitProvider adapts a Genkit model to provider.Provider.
 type genkitProvider struct {
-	g         *gk.Genkit
-	modelName string // "provider/model" format e.g. "anthropic/claude-sonnet-4-6"
-	name      string
-	authInfo  provider.AuthModeInfo
+	g             *gk.Genkit
+	modelName     string // "provider/model" format e.g. "anthropic/claude-sonnet-4-6"
+	name          string
+	authInfo      provider.AuthModeInfo
 	maxTokens     int // 0 means use model default
 	contextWindow int // 0 means use model default; non-zero passed as num_ctx to Ollama
 
 	// customConfig, when non-nil, is sent via ai.WithConfig instead of
-	// GenerationCommonConfig. Used for providers with their own config
-	// schemas (e.g. Ollama's GenerateContentConfig with Think support).
+	// GenerationCommonConfig. Used for provider-native schemas such as OpenAI's
+	// ChatCompletionNewParams and Ollama's GenerateContentConfig.
 	customConfig any
 
 	mu           sync.Mutex
@@ -31,7 +31,7 @@ type genkitProvider struct {
 // ContextWindow returns the configured context window size (0 = provider default).
 func (p *genkitProvider) ContextWindow() int { return p.contextWindow }
 
-func (p *genkitProvider) Name() string                      { return p.name }
+func (p *genkitProvider) Name() string                        { return p.name }
 func (p *genkitProvider) AuthModeInfo() provider.AuthModeInfo { return p.authInfo }
 
 // resolveToolRefs ensures each tool is registered exactly once and returns
