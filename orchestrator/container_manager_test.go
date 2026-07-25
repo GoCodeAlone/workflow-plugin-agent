@@ -1,9 +1,12 @@
 package orchestrator
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"io"
+	"net"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -16,6 +19,7 @@ import (
 	"github.com/docker/docker/api/types/image"
 	"github.com/docker/docker/api/types/network"
 	"github.com/docker/docker/client"
+	"github.com/docker/docker/pkg/stdcopy"
 	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
 
 	_ "modernc.org/sqlite"
@@ -74,6 +78,116 @@ func (c *blockingPullDockerClient) ImagePull(context.Context, string, image.Pull
 
 func (c *blockingPullDockerClient) Close() error {
 	return nil
+}
+
+type recordingDockerClient struct {
+	imageInspectRef      string
+	imageInspectResponse image.InspectResponse
+	imageInspectErr      error
+	imagePullRef         string
+	imagePullOptions     image.PullOptions
+	imagePullBody        string
+	imagePullErr         error
+
+	containerCreateConfig     *container.Config
+	containerCreateHostConfig *container.HostConfig
+	containerCreateNetwork    *network.NetworkingConfig
+	containerCreatePlatform   *ocispec.Platform
+	containerCreateName       string
+	containerCreateResponse   container.CreateResponse
+	containerCreateErr        error
+	containerStartID          string
+	containerStartOptions     container.StartOptions
+	containerStartErr         error
+	containerInspectID        string
+	containerInspectResponse  container.InspectResponse
+	containerInspectErr       error
+	containerStopID           string
+	containerStopOptions      container.StopOptions
+	containerStopErr          error
+	containerRemoveID         string
+	containerRemoveOptions    container.RemoveOptions
+	containerRemoveErr        error
+
+	execCreateContainerID string
+	execCreateOptions     container.ExecOptions
+	execCreateResponse    container.ExecCreateResponse
+	execCreateErr         error
+	execAttachID          string
+	execAttachOptions     container.ExecAttachOptions
+	execAttachResponse    types.HijackedResponse
+	execAttachErr         error
+	execInspectID         string
+	execInspectResponse   container.ExecInspect
+	execInspectErr        error
+	closeErr              error
+}
+
+func (c *recordingDockerClient) ContainerCreate(_ context.Context, config *container.Config, hostConfig *container.HostConfig, networkConfig *network.NetworkingConfig, platform *ocispec.Platform, name string) (container.CreateResponse, error) {
+	c.containerCreateConfig = config
+	c.containerCreateHostConfig = hostConfig
+	c.containerCreateNetwork = networkConfig
+	c.containerCreatePlatform = platform
+	c.containerCreateName = name
+	return c.containerCreateResponse, c.containerCreateErr
+}
+
+func (c *recordingDockerClient) ContainerExecAttach(_ context.Context, id string, options container.ExecAttachOptions) (types.HijackedResponse, error) {
+	c.execAttachID = id
+	c.execAttachOptions = options
+	return c.execAttachResponse, c.execAttachErr
+}
+
+func (c *recordingDockerClient) ContainerExecCreate(_ context.Context, containerID string, options container.ExecOptions) (container.ExecCreateResponse, error) {
+	c.execCreateContainerID = containerID
+	c.execCreateOptions = options
+	return c.execCreateResponse, c.execCreateErr
+}
+
+func (c *recordingDockerClient) ContainerExecInspect(_ context.Context, id string) (container.ExecInspect, error) {
+	c.execInspectID = id
+	return c.execInspectResponse, c.execInspectErr
+}
+
+func (c *recordingDockerClient) ContainerInspect(_ context.Context, id string) (container.InspectResponse, error) {
+	c.containerInspectID = id
+	return c.containerInspectResponse, c.containerInspectErr
+}
+
+func (c *recordingDockerClient) ContainerRemove(_ context.Context, id string, options container.RemoveOptions) error {
+	c.containerRemoveID = id
+	c.containerRemoveOptions = options
+	return c.containerRemoveErr
+}
+
+func (c *recordingDockerClient) ContainerStart(_ context.Context, id string, options container.StartOptions) error {
+	c.containerStartID = id
+	c.containerStartOptions = options
+	return c.containerStartErr
+}
+
+func (c *recordingDockerClient) ContainerStop(_ context.Context, id string, options container.StopOptions) error {
+	c.containerStopID = id
+	c.containerStopOptions = options
+	return c.containerStopErr
+}
+
+func (c *recordingDockerClient) ImageInspect(_ context.Context, ref string, _ ...client.ImageInspectOption) (image.InspectResponse, error) {
+	c.imageInspectRef = ref
+	return c.imageInspectResponse, c.imageInspectErr
+}
+
+func (c *recordingDockerClient) ImagePull(_ context.Context, ref string, options image.PullOptions) (io.ReadCloser, error) {
+	c.imagePullRef = ref
+	c.imagePullOptions = options
+	if c.imagePullErr != nil {
+		return nil, c.imagePullErr
+	}
+	return io.NopCloser(strings.NewReader(c.imagePullBody)), nil
+}
+
+func (c *recordingDockerClient) Close() error {
+	return c.closeErr
 }
 
 // ---------------------------------------------------------------------------
@@ -253,6 +367,201 @@ func TestContainerManager_EnsureContainerPullDoesNotStarveStatus(t *testing.T) {
 	if err := <-ensureDone; err != nil {
 		t.Fatalf("EnsureContainer: %v", err)
 	}
+}
+
+func TestContainerManagerDockerLifecycleOptions(t *testing.T) {
+	client := &recordingDockerClient{
+		imageInspectErr:         errors.New("image not found"),
+		containerCreateResponse: container.CreateResponse{ID: "container-1"},
+		containerInspectResponse: container.InspectResponse{
+			ContainerJSONBase: &container.ContainerJSONBase{
+				State: &container.State{Status: "PAUSED"},
+			},
+		},
+		execCreateResponse:  container.ExecCreateResponse{ID: "exec-1"},
+		execInspectResponse: container.ExecInspect{ExitCode: 7},
+	}
+	client.execAttachResponse = dockerExecResponse(t, "stdout", "stderr")
+	cm := &ContainerManager{
+		client:     client,
+		containers: make(map[string]string),
+		available:  true,
+	}
+
+	id, err := cm.EnsureContainer(t.Context(), "project-1", "/tmp/workspace", executor.SandboxConfig{
+		Image:   "alpine:3.22",
+		Memory:  "512m",
+		CPU:     1.5,
+		Network: "bridge",
+		Mounts: []executor.SandboxMount{
+			{Src: "/tmp/cache", Dst: "/cache", ReadOnly: true},
+		},
+	})
+	if err != nil {
+		t.Fatalf("EnsureContainer: %v", err)
+	}
+	if id != "container-1" {
+		t.Fatalf("container ID = %q, want container-1", id)
+	}
+	if client.imageInspectRef != "alpine:3.22" || client.imagePullRef != "alpine:3.22" {
+		t.Fatalf("image inspect/pull refs = %q/%q", client.imageInspectRef, client.imagePullRef)
+	}
+	if client.containerCreateName != "ratchet-project-1" {
+		t.Errorf("create name = %q", client.containerCreateName)
+	}
+	if client.containerCreateConfig.Image != "alpine:3.22" ||
+		client.containerCreateConfig.WorkingDir != "/workspace" ||
+		!slices.Equal(client.containerCreateConfig.Cmd, []string{"sleep", "infinity"}) {
+		t.Errorf("create config = %#v", client.containerCreateConfig)
+	}
+	hostConfig := client.containerCreateHostConfig
+	if hostConfig.Memory != 512*1024*1024 || hostConfig.NanoCPUs != 1_500_000_000 ||
+		hostConfig.NetworkMode != "bridge" {
+		t.Errorf("host config resources = %#v", hostConfig.Resources)
+	}
+	if len(hostConfig.Mounts) != 2 ||
+		hostConfig.Mounts[0].Source != "/tmp/workspace" ||
+		hostConfig.Mounts[1].Source != "/tmp/cache" ||
+		hostConfig.Mounts[1].Target != "/cache" ||
+		!hostConfig.Mounts[1].ReadOnly {
+		t.Errorf("host config mounts = %#v", hostConfig.Mounts)
+	}
+	if client.containerStartID != "container-1" {
+		t.Errorf("start ID = %q", client.containerStartID)
+	}
+
+	status, err := cm.GetContainerStatus(t.Context(), "project-1")
+	if err != nil {
+		t.Fatalf("GetContainerStatus: %v", err)
+	}
+	if status != "paused" || client.containerInspectID != "container-1" {
+		t.Fatalf("status/inspect ID = %q/%q", status, client.containerInspectID)
+	}
+
+	stdout, stderr, exitCode, err := cm.ExecInContainer(
+		t.Context(), "project-1", "echo hello", "/workspace/subdir", 45,
+	)
+	if err != nil {
+		t.Fatalf("ExecInContainer: %v", err)
+	}
+	if stdout != "stdout" || stderr != "stderr" || exitCode != 7 {
+		t.Fatalf("exec result = %q/%q/%d", stdout, stderr, exitCode)
+	}
+	if client.execCreateContainerID != "container-1" ||
+		!slices.Equal(client.execCreateOptions.Cmd, []string{"sh", "-c", "echo hello"}) ||
+		client.execCreateOptions.WorkingDir != "/workspace/subdir" ||
+		!client.execCreateOptions.AttachStdout ||
+		!client.execCreateOptions.AttachStderr {
+		t.Errorf("exec create = container %q options %#v", client.execCreateContainerID, client.execCreateOptions)
+	}
+	if client.execAttachID != "exec-1" || client.execInspectID != "exec-1" {
+		t.Errorf("exec attach/inspect IDs = %q/%q", client.execAttachID, client.execInspectID)
+	}
+
+	if err := cm.StopContainer(t.Context(), "project-1"); err != nil {
+		t.Fatalf("StopContainer: %v", err)
+	}
+	if client.containerStopID != "container-1" {
+		t.Errorf("stop ID = %q", client.containerStopID)
+	}
+
+	cm.containers["project-1"] = "container-1"
+	if err := cm.RemoveContainer(t.Context(), "project-1"); err != nil {
+		t.Fatalf("RemoveContainer: %v", err)
+	}
+	if client.containerRemoveID != "container-1" || !client.containerRemoveOptions.Force {
+		t.Errorf("remove ID/options = %q/%#v", client.containerRemoveID, client.containerRemoveOptions)
+	}
+}
+
+func TestContainerManagerDockerErrors(t *testing.T) {
+	t.Run("image pull", func(t *testing.T) {
+		client := &recordingDockerClient{
+			imageInspectErr: errors.New("missing"),
+			imagePullErr:    errors.New("registry unavailable"),
+		}
+		cm := newAvailableContainerManager(client)
+		_, err := cm.EnsureContainer(t.Context(), "project-1", "/tmp/workspace", executor.SandboxConfig{Image: "alpine"})
+		if err == nil || !strings.Contains(err.Error(), "registry unavailable") {
+			t.Fatalf("EnsureContainer error = %v", err)
+		}
+	})
+
+	t.Run("start cleans up created container", func(t *testing.T) {
+		client := &recordingDockerClient{
+			containerCreateResponse: container.CreateResponse{ID: "container-1"},
+			containerStartErr:       errors.New("start failed"),
+		}
+		cm := newAvailableContainerManager(client)
+		_, err := cm.EnsureContainer(t.Context(), "project-1", "/tmp/workspace", executor.SandboxConfig{Image: "alpine"})
+		if err == nil || !strings.Contains(err.Error(), "start failed") {
+			t.Fatalf("EnsureContainer error = %v", err)
+		}
+		if client.containerRemoveID != "container-1" || !client.containerRemoveOptions.Force {
+			t.Fatalf("cleanup remove = %q/%#v", client.containerRemoveID, client.containerRemoveOptions)
+		}
+	})
+
+	t.Run("status inspect", func(t *testing.T) {
+		client := &recordingDockerClient{containerInspectErr: errors.New("inspect failed")}
+		cm := newAvailableContainerManager(client)
+		cm.containers["project-1"] = "container-1"
+		status, err := cm.GetContainerStatus(t.Context(), "project-1")
+		if status != "unknown" || err == nil || !strings.Contains(err.Error(), "inspect failed") {
+			t.Fatalf("GetContainerStatus = %q, %v", status, err)
+		}
+	})
+
+	t.Run("exec create", func(t *testing.T) {
+		client := &recordingDockerClient{execCreateErr: errors.New("exec failed")}
+		cm := newAvailableContainerManager(client)
+		cm.containers["project-1"] = "container-1"
+		_, _, exitCode, err := cm.ExecInContainer(t.Context(), "project-1", "false", "/workspace", 30)
+		if exitCode != -1 || err == nil || !strings.Contains(err.Error(), "exec failed") {
+			t.Fatalf("ExecInContainer exit/error = %d/%v", exitCode, err)
+		}
+	})
+
+	t.Run("stop and remove", func(t *testing.T) {
+		client := &recordingDockerClient{containerStopErr: errors.New("stop failed")}
+		cm := newAvailableContainerManager(client)
+		cm.containers["project-1"] = "container-1"
+		if err := cm.StopContainer(t.Context(), "project-1"); err == nil || !strings.Contains(err.Error(), "stop failed") {
+			t.Fatalf("StopContainer error = %v", err)
+		}
+
+		client.containerRemoveErr = errors.New("remove failed")
+		cm.containers["project-1"] = "container-1"
+		if err := cm.RemoveContainer(t.Context(), "project-1"); err == nil || !strings.Contains(err.Error(), "remove failed") {
+			t.Fatalf("RemoveContainer error = %v", err)
+		}
+	})
+}
+
+func newAvailableContainerManager(client dockerAPIClient) *ContainerManager {
+	return &ContainerManager{
+		client:     client,
+		containers: make(map[string]string),
+		available:  true,
+	}
+}
+
+func dockerExecResponse(t *testing.T, stdout, stderr string) types.HijackedResponse {
+	t.Helper()
+	var stream bytes.Buffer
+	if _, err := stdcopy.NewStdWriter(&stream, stdcopy.Stdout).Write([]byte(stdout)); err != nil {
+		t.Fatalf("encode stdout: %v", err)
+	}
+	if _, err := stdcopy.NewStdWriter(&stream, stdcopy.Stderr).Write([]byte(stderr)); err != nil {
+		t.Fatalf("encode stderr: %v", err)
+	}
+
+	server, client := net.Pipe()
+	go func() {
+		_, _ = server.Write(stream.Bytes())
+		_ = server.Close()
+	}()
+	return types.NewHijackedResponse(client, "application/vnd.docker.multiplexed-stream")
 }
 
 // ---------------------------------------------------------------------------
