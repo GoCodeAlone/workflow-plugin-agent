@@ -3,8 +3,10 @@ package orchestrator
 import (
 	"bytes"
 	"context"
+	"encoding/binary"
 	"errors"
 	"io"
+	"iter"
 	"net"
 	"slices"
 	"strings"
@@ -14,13 +16,10 @@ import (
 	"github.com/GoCodeAlone/workflow-plugin-agent/executor"
 	"github.com/GoCodeAlone/workflow-plugin-agent/orchestrator/tools"
 	"github.com/GoCodeAlone/workflow/module"
-	"github.com/docker/docker/api/types"
-	"github.com/docker/docker/api/types/container"
-	"github.com/docker/docker/api/types/image"
-	"github.com/docker/docker/api/types/network"
-	"github.com/docker/docker/client"
-	"github.com/docker/docker/pkg/stdcopy"
-	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
+	"github.com/moby/moby/api/pkg/stdcopy"
+	"github.com/moby/moby/api/types/container"
+	"github.com/moby/moby/api/types/jsonstream"
+	"github.com/moby/moby/client"
 
 	_ "modernc.org/sqlite"
 )
@@ -34,46 +33,50 @@ func newBlockingPullDockerClient() *blockingPullDockerClient {
 	return &blockingPullDockerClient{pullEntered: make(chan struct{}), releasePull: make(chan struct{})}
 }
 
-func (c *blockingPullDockerClient) ContainerCreate(context.Context, *container.Config, *container.HostConfig, *network.NetworkingConfig, *ocispec.Platform, string) (container.CreateResponse, error) {
-	return container.CreateResponse{ID: "container-1"}, nil
+func (c *blockingPullDockerClient) ContainerCreate(context.Context, client.ContainerCreateOptions) (client.ContainerCreateResult, error) {
+	return client.ContainerCreateResult{ID: "container-1"}, nil
 }
 
-func (c *blockingPullDockerClient) ContainerExecAttach(context.Context, string, container.ExecAttachOptions) (types.HijackedResponse, error) {
-	return types.HijackedResponse{}, nil
+func (c *blockingPullDockerClient) ExecAttach(context.Context, string, client.ExecAttachOptions) (client.ExecAttachResult, error) {
+	return client.ExecAttachResult{}, nil
 }
 
-func (c *blockingPullDockerClient) ContainerExecCreate(context.Context, string, container.ExecOptions) (container.ExecCreateResponse, error) {
-	return container.ExecCreateResponse{ID: "exec-1"}, nil
+func (c *blockingPullDockerClient) ExecCreate(context.Context, string, client.ExecCreateOptions) (client.ExecCreateResult, error) {
+	return client.ExecCreateResult{ID: "exec-1"}, nil
 }
 
-func (c *blockingPullDockerClient) ContainerExecInspect(context.Context, string) (container.ExecInspect, error) {
-	return container.ExecInspect{}, nil
+func (c *blockingPullDockerClient) ExecInspect(context.Context, string, client.ExecInspectOptions) (client.ExecInspectResult, error) {
+	return client.ExecInspectResult{}, nil
 }
 
-func (c *blockingPullDockerClient) ContainerInspect(context.Context, string) (container.InspectResponse, error) {
-	return container.InspectResponse{ContainerJSONBase: &container.ContainerJSONBase{State: &container.State{Status: "running", Running: true}}}, nil
+func (c *blockingPullDockerClient) ContainerInspect(context.Context, string, client.ContainerInspectOptions) (client.ContainerInspectResult, error) {
+	return client.ContainerInspectResult{
+		Container: container.InspectResponse{
+			State: &container.State{Status: container.StateRunning, Running: true},
+		},
+	}, nil
 }
 
-func (c *blockingPullDockerClient) ContainerRemove(context.Context, string, container.RemoveOptions) error {
-	return nil
+func (c *blockingPullDockerClient) ContainerRemove(context.Context, string, client.ContainerRemoveOptions) (client.ContainerRemoveResult, error) {
+	return client.ContainerRemoveResult{}, nil
 }
 
-func (c *blockingPullDockerClient) ContainerStart(context.Context, string, container.StartOptions) error {
-	return nil
+func (c *blockingPullDockerClient) ContainerStart(context.Context, string, client.ContainerStartOptions) (client.ContainerStartResult, error) {
+	return client.ContainerStartResult{}, nil
 }
 
-func (c *blockingPullDockerClient) ContainerStop(context.Context, string, container.StopOptions) error {
-	return nil
+func (c *blockingPullDockerClient) ContainerStop(context.Context, string, client.ContainerStopOptions) (client.ContainerStopResult, error) {
+	return client.ContainerStopResult{}, nil
 }
 
-func (c *blockingPullDockerClient) ImageInspect(context.Context, string, ...client.ImageInspectOption) (image.InspectResponse, error) {
-	return image.InspectResponse{}, errors.New("missing image")
+func (c *blockingPullDockerClient) ImageInspect(context.Context, string, ...client.ImageInspectOption) (client.ImageInspectResult, error) {
+	return client.ImageInspectResult{}, errors.New("missing image")
 }
 
-func (c *blockingPullDockerClient) ImagePull(context.Context, string, image.PullOptions) (io.ReadCloser, error) {
+func (c *blockingPullDockerClient) ImagePull(context.Context, string, client.ImagePullOptions) (client.ImagePullResponse, error) {
 	close(c.pullEntered)
 	<-c.releasePull
-	return io.NopCloser(strings.NewReader("")), nil
+	return newFakeImagePullResponse(""), nil
 }
 
 func (c *blockingPullDockerClient) Close() error {
@@ -82,108 +85,104 @@ func (c *blockingPullDockerClient) Close() error {
 
 type recordingDockerClient struct {
 	imageInspectRef      string
-	imageInspectResponse image.InspectResponse
+	imageInspectResponse client.ImageInspectResult
 	imageInspectErr      error
 	imagePullRef         string
-	imagePullOptions     image.PullOptions
+	imagePullOptions     client.ImagePullOptions
 	imagePullBody        string
 	imagePullErr         error
 
-	containerCreateConfig     *container.Config
-	containerCreateHostConfig *container.HostConfig
-	containerCreateNetwork    *network.NetworkingConfig
-	containerCreatePlatform   *ocispec.Platform
-	containerCreateName       string
-	containerCreateResponse   container.CreateResponse
-	containerCreateErr        error
-	containerStartID          string
-	containerStartOptions     container.StartOptions
-	containerStartErr         error
-	containerInspectID        string
-	containerInspectResponse  container.InspectResponse
-	containerInspectErr       error
-	containerStopID           string
-	containerStopOptions      container.StopOptions
-	containerStopErr          error
-	containerRemoveID         string
-	containerRemoveOptions    container.RemoveOptions
-	containerRemoveErr        error
+	containerCreateOptions   client.ContainerCreateOptions
+	containerCreateResponse  client.ContainerCreateResult
+	containerCreateErr       error
+	containerStartID         string
+	containerStartOptions    client.ContainerStartOptions
+	containerStartErr        error
+	containerInspectID       string
+	containerInspectOptions  client.ContainerInspectOptions
+	containerInspectResponse client.ContainerInspectResult
+	containerInspectErr      error
+	containerStopID          string
+	containerStopOptions     client.ContainerStopOptions
+	containerStopErr         error
+	containerRemoveID        string
+	containerRemoveOptions   client.ContainerRemoveOptions
+	containerRemoveErr       error
 
 	execCreateContainerID string
-	execCreateOptions     container.ExecOptions
-	execCreateResponse    container.ExecCreateResponse
+	execCreateOptions     client.ExecCreateOptions
+	execCreateResponse    client.ExecCreateResult
 	execCreateErr         error
 	execAttachID          string
-	execAttachOptions     container.ExecAttachOptions
-	execAttachResponse    types.HijackedResponse
+	execAttachOptions     client.ExecAttachOptions
+	execAttachResponse    client.ExecAttachResult
 	execAttachErr         error
 	execInspectID         string
-	execInspectResponse   container.ExecInspect
+	execInspectOptions    client.ExecInspectOptions
+	execInspectResponse   client.ExecInspectResult
 	execInspectErr        error
 	closeErr              error
 }
 
-func (c *recordingDockerClient) ContainerCreate(_ context.Context, config *container.Config, hostConfig *container.HostConfig, networkConfig *network.NetworkingConfig, platform *ocispec.Platform, name string) (container.CreateResponse, error) {
-	c.containerCreateConfig = config
-	c.containerCreateHostConfig = hostConfig
-	c.containerCreateNetwork = networkConfig
-	c.containerCreatePlatform = platform
-	c.containerCreateName = name
+func (c *recordingDockerClient) ContainerCreate(_ context.Context, options client.ContainerCreateOptions) (client.ContainerCreateResult, error) {
+	c.containerCreateOptions = options
 	return c.containerCreateResponse, c.containerCreateErr
 }
 
-func (c *recordingDockerClient) ContainerExecAttach(_ context.Context, id string, options container.ExecAttachOptions) (types.HijackedResponse, error) {
+func (c *recordingDockerClient) ExecAttach(_ context.Context, id string, options client.ExecAttachOptions) (client.ExecAttachResult, error) {
 	c.execAttachID = id
 	c.execAttachOptions = options
 	return c.execAttachResponse, c.execAttachErr
 }
 
-func (c *recordingDockerClient) ContainerExecCreate(_ context.Context, containerID string, options container.ExecOptions) (container.ExecCreateResponse, error) {
+func (c *recordingDockerClient) ExecCreate(_ context.Context, containerID string, options client.ExecCreateOptions) (client.ExecCreateResult, error) {
 	c.execCreateContainerID = containerID
 	c.execCreateOptions = options
 	return c.execCreateResponse, c.execCreateErr
 }
 
-func (c *recordingDockerClient) ContainerExecInspect(_ context.Context, id string) (container.ExecInspect, error) {
+func (c *recordingDockerClient) ExecInspect(_ context.Context, id string, options client.ExecInspectOptions) (client.ExecInspectResult, error) {
 	c.execInspectID = id
+	c.execInspectOptions = options
 	return c.execInspectResponse, c.execInspectErr
 }
 
-func (c *recordingDockerClient) ContainerInspect(_ context.Context, id string) (container.InspectResponse, error) {
+func (c *recordingDockerClient) ContainerInspect(_ context.Context, id string, options client.ContainerInspectOptions) (client.ContainerInspectResult, error) {
 	c.containerInspectID = id
+	c.containerInspectOptions = options
 	return c.containerInspectResponse, c.containerInspectErr
 }
 
-func (c *recordingDockerClient) ContainerRemove(_ context.Context, id string, options container.RemoveOptions) error {
+func (c *recordingDockerClient) ContainerRemove(_ context.Context, id string, options client.ContainerRemoveOptions) (client.ContainerRemoveResult, error) {
 	c.containerRemoveID = id
 	c.containerRemoveOptions = options
-	return c.containerRemoveErr
+	return client.ContainerRemoveResult{}, c.containerRemoveErr
 }
 
-func (c *recordingDockerClient) ContainerStart(_ context.Context, id string, options container.StartOptions) error {
+func (c *recordingDockerClient) ContainerStart(_ context.Context, id string, options client.ContainerStartOptions) (client.ContainerStartResult, error) {
 	c.containerStartID = id
 	c.containerStartOptions = options
-	return c.containerStartErr
+	return client.ContainerStartResult{}, c.containerStartErr
 }
 
-func (c *recordingDockerClient) ContainerStop(_ context.Context, id string, options container.StopOptions) error {
+func (c *recordingDockerClient) ContainerStop(_ context.Context, id string, options client.ContainerStopOptions) (client.ContainerStopResult, error) {
 	c.containerStopID = id
 	c.containerStopOptions = options
-	return c.containerStopErr
+	return client.ContainerStopResult{}, c.containerStopErr
 }
 
-func (c *recordingDockerClient) ImageInspect(_ context.Context, ref string, _ ...client.ImageInspectOption) (image.InspectResponse, error) {
+func (c *recordingDockerClient) ImageInspect(_ context.Context, ref string, _ ...client.ImageInspectOption) (client.ImageInspectResult, error) {
 	c.imageInspectRef = ref
 	return c.imageInspectResponse, c.imageInspectErr
 }
 
-func (c *recordingDockerClient) ImagePull(_ context.Context, ref string, options image.PullOptions) (io.ReadCloser, error) {
+func (c *recordingDockerClient) ImagePull(_ context.Context, ref string, options client.ImagePullOptions) (client.ImagePullResponse, error) {
 	c.imagePullRef = ref
 	c.imagePullOptions = options
 	if c.imagePullErr != nil {
 		return nil, c.imagePullErr
 	}
-	return io.NopCloser(strings.NewReader(c.imagePullBody)), nil
+	return newFakeImagePullResponse(c.imagePullBody), nil
 }
 
 func (c *recordingDockerClient) Close() error {
@@ -372,14 +371,14 @@ func TestContainerManager_EnsureContainerPullDoesNotStarveStatus(t *testing.T) {
 func TestContainerManagerDockerLifecycleOptions(t *testing.T) {
 	client := &recordingDockerClient{
 		imageInspectErr:         errors.New("image not found"),
-		containerCreateResponse: container.CreateResponse{ID: "container-1"},
-		containerInspectResponse: container.InspectResponse{
-			ContainerJSONBase: &container.ContainerJSONBase{
-				State: &container.State{Status: "PAUSED"},
+		containerCreateResponse: client.ContainerCreateResult{ID: "container-1"},
+		containerInspectResponse: client.ContainerInspectResult{
+			Container: container.InspectResponse{
+				State: &container.State{Status: container.ContainerState("PAUSED")},
 			},
 		},
-		execCreateResponse:  container.ExecCreateResponse{ID: "exec-1"},
-		execInspectResponse: container.ExecInspect{ExitCode: 7},
+		execCreateResponse:  client.ExecCreateResult{ID: "exec-1"},
+		execInspectResponse: client.ExecInspectResult{ExitCode: 7},
 	}
 	client.execAttachResponse = dockerExecResponse(t, "stdout", "stderr")
 	cm := &ContainerManager{
@@ -406,15 +405,16 @@ func TestContainerManagerDockerLifecycleOptions(t *testing.T) {
 	if client.imageInspectRef != "alpine:3.22" || client.imagePullRef != "alpine:3.22" {
 		t.Fatalf("image inspect/pull refs = %q/%q", client.imageInspectRef, client.imagePullRef)
 	}
-	if client.containerCreateName != "ratchet-project-1" {
-		t.Errorf("create name = %q", client.containerCreateName)
+	if client.containerCreateOptions.Name != "ratchet-project-1" {
+		t.Errorf("create name = %q", client.containerCreateOptions.Name)
 	}
-	if client.containerCreateConfig.Image != "alpine:3.22" ||
-		client.containerCreateConfig.WorkingDir != "/workspace" ||
-		!slices.Equal(client.containerCreateConfig.Cmd, []string{"sleep", "infinity"}) {
-		t.Errorf("create config = %#v", client.containerCreateConfig)
+	createConfig := client.containerCreateOptions.Config
+	if createConfig.Image != "alpine:3.22" ||
+		createConfig.WorkingDir != "/workspace" ||
+		!slices.Equal(createConfig.Cmd, []string{"sleep", "infinity"}) {
+		t.Errorf("create config = %#v", createConfig)
 	}
-	hostConfig := client.containerCreateHostConfig
+	hostConfig := client.containerCreateOptions.HostConfig
 	if hostConfig.Memory != 512*1024*1024 || hostConfig.NanoCPUs != 1_500_000_000 ||
 		hostConfig.NetworkMode != "bridge" {
 		t.Errorf("host config resources = %#v", hostConfig.Resources)
@@ -489,7 +489,7 @@ func TestContainerManagerDockerErrors(t *testing.T) {
 
 	t.Run("start cleans up created container", func(t *testing.T) {
 		client := &recordingDockerClient{
-			containerCreateResponse: container.CreateResponse{ID: "container-1"},
+			containerCreateResponse: client.ContainerCreateResult{ID: "container-1"},
 			containerStartErr:       errors.New("start failed"),
 		}
 		cm := newAvailableContainerManager(client)
@@ -546,22 +546,51 @@ func newAvailableContainerManager(client dockerAPIClient) *ContainerManager {
 	}
 }
 
-func dockerExecResponse(t *testing.T, stdout, stderr string) types.HijackedResponse {
+func dockerExecResponse(t *testing.T, stdout, stderr string) client.ExecAttachResult {
 	t.Helper()
 	var stream bytes.Buffer
-	if _, err := stdcopy.NewStdWriter(&stream, stdcopy.Stdout).Write([]byte(stdout)); err != nil {
+	if err := writeDockerFrame(&stream, stdcopy.Stdout, stdout); err != nil {
 		t.Fatalf("encode stdout: %v", err)
 	}
-	if _, err := stdcopy.NewStdWriter(&stream, stdcopy.Stderr).Write([]byte(stderr)); err != nil {
+	if err := writeDockerFrame(&stream, stdcopy.Stderr, stderr); err != nil {
 		t.Fatalf("encode stderr: %v", err)
 	}
 
-	server, client := net.Pipe()
+	server, connection := net.Pipe()
 	go func() {
 		_, _ = server.Write(stream.Bytes())
 		_ = server.Close()
 	}()
-	return types.NewHijackedResponse(client, "application/vnd.docker.multiplexed-stream")
+	return client.ExecAttachResult{
+		HijackedResponse: client.NewHijackedResponse(connection, "application/vnd.docker.multiplexed-stream"),
+	}
+}
+
+func writeDockerFrame(writer io.Writer, stream stdcopy.StdType, payload string) error {
+	header := [8]byte{0: byte(stream)}
+	binary.BigEndian.PutUint32(header[4:], uint32(len(payload)))
+	if _, err := writer.Write(header[:]); err != nil {
+		return err
+	}
+	_, err := io.WriteString(writer, payload)
+	return err
+}
+
+type fakeImagePullResponse struct {
+	io.ReadCloser
+}
+
+func newFakeImagePullResponse(body string) *fakeImagePullResponse {
+	return &fakeImagePullResponse{ReadCloser: io.NopCloser(strings.NewReader(body))}
+}
+
+func (r *fakeImagePullResponse) JSONMessages(context.Context) iter.Seq2[jsonstream.Message, error] {
+	return func(func(jsonstream.Message, error) bool) {}
+}
+
+func (r *fakeImagePullResponse) Wait(context.Context) error {
+	_, err := io.Copy(io.Discard, r)
+	return err
 }
 
 // ---------------------------------------------------------------------------

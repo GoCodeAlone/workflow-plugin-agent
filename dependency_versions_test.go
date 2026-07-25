@@ -11,10 +11,11 @@ import (
 
 func TestSecurityDependencyVersions(t *testing.T) {
 	required := map[string]string{
-		"github.com/moby/moby/api":    "v1.55.0",
-		"github.com/moby/moby/client": "v0.5.0",
-		"github.com/ollama/ollama":    "v0.32.4",
-		"google.golang.org/grpc":      "v1.82.1",
+		"github.com/GoCodeAlone/workflow-plugin-authz": "v0.6.0",
+		"github.com/moby/moby/api":                     "v1.55.0",
+		"github.com/moby/moby/client":                  "v0.5.0",
+		"github.com/ollama/ollama":                     "v0.32.4",
+		"google.golang.org/grpc":                       "v1.82.1",
 	}
 
 	_, file, _, ok := runtime.Caller(0)

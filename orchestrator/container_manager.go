@@ -14,14 +14,10 @@ import (
 	"time"
 
 	"github.com/GoCodeAlone/workflow-plugin-agent/executor"
-	"github.com/docker/docker/api/types"
-	"github.com/docker/docker/api/types/container"
-	"github.com/docker/docker/api/types/image"
-	"github.com/docker/docker/api/types/mount"
-	"github.com/docker/docker/api/types/network"
-	"github.com/docker/docker/client"
-	"github.com/docker/docker/pkg/stdcopy"
-	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
+	"github.com/moby/moby/api/pkg/stdcopy"
+	"github.com/moby/moby/api/types/container"
+	"github.com/moby/moby/api/types/mount"
+	"github.com/moby/moby/client"
 )
 
 // MountSpec describes a single bind mount.
@@ -55,16 +51,16 @@ type ContainerManager struct {
 }
 
 type dockerAPIClient interface {
-	ContainerCreate(context.Context, *container.Config, *container.HostConfig, *network.NetworkingConfig, *ocispec.Platform, string) (container.CreateResponse, error)
-	ContainerExecAttach(context.Context, string, container.ExecAttachOptions) (types.HijackedResponse, error)
-	ContainerExecCreate(context.Context, string, container.ExecOptions) (container.ExecCreateResponse, error)
-	ContainerExecInspect(context.Context, string) (container.ExecInspect, error)
-	ContainerInspect(context.Context, string) (container.InspectResponse, error)
-	ContainerRemove(context.Context, string, container.RemoveOptions) error
-	ContainerStart(context.Context, string, container.StartOptions) error
-	ContainerStop(context.Context, string, container.StopOptions) error
-	ImageInspect(context.Context, string, ...client.ImageInspectOption) (image.InspectResponse, error)
-	ImagePull(context.Context, string, image.PullOptions) (io.ReadCloser, error)
+	ContainerCreate(context.Context, client.ContainerCreateOptions) (client.ContainerCreateResult, error)
+	ExecAttach(context.Context, string, client.ExecAttachOptions) (client.ExecAttachResult, error)
+	ExecCreate(context.Context, string, client.ExecCreateOptions) (client.ExecCreateResult, error)
+	ExecInspect(context.Context, string, client.ExecInspectOptions) (client.ExecInspectResult, error)
+	ContainerInspect(context.Context, string, client.ContainerInspectOptions) (client.ContainerInspectResult, error)
+	ContainerRemove(context.Context, string, client.ContainerRemoveOptions) (client.ContainerRemoveResult, error)
+	ContainerStart(context.Context, string, client.ContainerStartOptions) (client.ContainerStartResult, error)
+	ContainerStop(context.Context, string, client.ContainerStopOptions) (client.ContainerStopResult, error)
+	ImageInspect(context.Context, string, ...client.ImageInspectOption) (client.ImageInspectResult, error)
+	ImagePull(context.Context, string, client.ImagePullOptions) (client.ImagePullResponse, error)
 	Close() error
 }
 
@@ -78,7 +74,7 @@ func NewContainerManager(db *sql.DB) *ContainerManager {
 		ensureInFlight: make(map[string]chan struct{}),
 	}
 
-	cli, err := client.NewClientWithOpts(client.FromEnv, client.WithAPIVersionNegotiation())
+	cli, err := client.New(client.FromEnv)
 	if err != nil {
 		return cm
 	}
@@ -86,7 +82,7 @@ func NewContainerManager(db *sql.DB) *ContainerManager {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	_, err = cli.Ping(ctx)
+	_, err = cli.Ping(ctx, client.PingOptions{})
 	if err != nil {
 		_ = cli.Close()
 		return cm
@@ -155,8 +151,8 @@ func (cm *ContainerManager) EnsureContainer(ctx context.Context, projectID, work
 	cm.mu.Unlock()
 	if ok {
 		// Verify container is still running
-		info, err := cm.client.ContainerInspect(ctx, cid)
-		if err == nil && info.State.Running {
+		info, err := cm.client.ContainerInspect(ctx, cid, client.ContainerInspectOptions{})
+		if err == nil && info.Container.State.Running {
 			return cid, nil
 		}
 		// Container gone or stopped — remove from cache
@@ -214,16 +210,20 @@ func (cm *ContainerManager) EnsureContainer(ctx context.Context, projectID, work
 		hostCfg.NetworkMode = container.NetworkMode(spec.Network)
 	}
 
-	resp, err := cm.client.ContainerCreate(ctx, containerCfg, hostCfg, nil, nil, "ratchet-"+projectID)
+	resp, err := cm.client.ContainerCreate(ctx, client.ContainerCreateOptions{
+		Config:     containerCfg,
+		HostConfig: hostCfg,
+		Name:       "ratchet-" + projectID,
+	})
 	if err != nil {
 		return "", fmt.Errorf("container manager: create container: %w", err)
 	}
 
-	if err := cm.client.ContainerStart(ctx, resp.ID, container.StartOptions{}); err != nil {
+	if _, err := cm.client.ContainerStart(ctx, resp.ID, client.ContainerStartOptions{}); err != nil {
 		// Clean up on failure
 		rmCtx, rmCancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer rmCancel()
-		_ = cm.client.ContainerRemove(rmCtx, resp.ID, container.RemoveOptions{Force: true})
+		_, _ = cm.client.ContainerRemove(rmCtx, resp.ID, client.ContainerRemoveOptions{Force: true})
 		return "", fmt.Errorf("container manager: start container: %w", err)
 	}
 
@@ -309,19 +309,19 @@ func (cm *ContainerManager) execInContainerLocked(ctx context.Context, container
 	execCtx, cancel := context.WithTimeout(ctx, time.Duration(timeout)*time.Second)
 	defer cancel()
 
-	execCfg := container.ExecOptions{
+	execCfg := client.ExecCreateOptions{
 		Cmd:          []string{"sh", "-c", command},
 		WorkingDir:   workDir,
 		AttachStdout: true,
 		AttachStderr: true,
 	}
 
-	execResp, err := cm.client.ContainerExecCreate(execCtx, containerID, execCfg)
+	execResp, err := cm.client.ExecCreate(execCtx, containerID, execCfg)
 	if err != nil {
 		return "", "", -1, fmt.Errorf("container exec create: %w", err)
 	}
 
-	attachResp, err := cm.client.ContainerExecAttach(execCtx, execResp.ID, container.ExecAttachOptions{})
+	attachResp, err := cm.client.ExecAttach(execCtx, execResp.ID, client.ExecAttachOptions{})
 	if err != nil {
 		return "", "", -1, fmt.Errorf("container exec attach: %w", err)
 	}
@@ -333,7 +333,7 @@ func (cm *ContainerManager) execInContainerLocked(ctx context.Context, container
 		return "", "", -1, fmt.Errorf("container exec read: %w", err)
 	}
 
-	inspectResp, err := cm.client.ContainerExecInspect(execCtx, execResp.ID)
+	inspectResp, err := cm.client.ExecInspect(execCtx, execResp.ID, client.ExecInspectOptions{})
 	if err != nil {
 		return stdoutBuf.String(), stderrBuf.String(), -1, fmt.Errorf("container exec inspect: %w", err)
 	}
@@ -358,7 +358,7 @@ func (cm *ContainerManager) StopContainer(ctx context.Context, projectID string)
 		return fmt.Errorf("container manager: no container for project %q", projectID)
 	}
 
-	if err := cm.client.ContainerStop(ctx, cid, container.StopOptions{}); err != nil {
+	if _, err := cm.client.ContainerStop(ctx, cid, client.ContainerStopOptions{}); err != nil {
 		return fmt.Errorf("container manager: stop: %w", err)
 	}
 
@@ -389,7 +389,7 @@ func (cm *ContainerManager) RemoveContainer(ctx context.Context, projectID strin
 		return fmt.Errorf("container manager: no container for project %q", projectID)
 	}
 
-	if err := cm.client.ContainerRemove(ctx, cid, container.RemoveOptions{Force: true}); err != nil {
+	if _, err := cm.client.ContainerRemove(ctx, cid, client.ContainerRemoveOptions{Force: true}); err != nil {
 		return fmt.Errorf("container manager: remove: %w", err)
 	}
 
@@ -417,12 +417,12 @@ func (cm *ContainerManager) GetContainerStatus(ctx context.Context, projectID st
 		return "none", nil
 	}
 
-	info, err := cm.client.ContainerInspect(ctx, cid)
+	info, err := cm.client.ContainerInspect(ctx, cid, client.ContainerInspectOptions{})
 	if err != nil {
 		return "unknown", fmt.Errorf("container manager: inspect: %w", err)
 	}
 
-	return strings.ToLower(info.State.Status), nil
+	return strings.ToLower(string(info.Container.State.Status)), nil
 }
 
 // Close stops all managed containers and closes the Docker client.
@@ -438,7 +438,7 @@ func (cm *ContainerManager) Close() error {
 	defer cancel()
 
 	for pid, cid := range cm.containers {
-		_ = cm.client.ContainerStop(ctx, cid, container.StopOptions{})
+		_, _ = cm.client.ContainerStop(ctx, cid, client.ContainerStopOptions{})
 		delete(cm.containers, pid)
 	}
 
@@ -452,7 +452,7 @@ func (cm *ContainerManager) ensureImage(ctx context.Context, img string) error {
 		return nil
 	}
 
-	reader, err := cm.client.ImagePull(ctx, img, image.PullOptions{})
+	reader, err := cm.client.ImagePull(ctx, img, client.ImagePullOptions{})
 	if err != nil {
 		return err
 	}
