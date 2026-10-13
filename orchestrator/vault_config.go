@@ -106,8 +106,9 @@ func vaultConfigDir() string {
 
 // deriveKey derives a 32-byte AES key from the config directory path and a
 // machine-local keyfile. The keyfile is created on first use and stored at
-// dir/.vault-key with 0600 permissions. This ensures the token can only be
-// decrypted on the same machine in the same data directory.
+// dir/.vault-key with mode 0600 on Unix; Windows inherits directory ACLs.
+// The keyfile and directory must be protected by the caller. Key material and
+// the directory path determine the encryption key.
 func deriveKey(dir string) ([]byte, error) {
 	keyPath := filepath.Join(dir, ".vault-key")
 	keyMaterial, err := os.ReadFile(keyPath)

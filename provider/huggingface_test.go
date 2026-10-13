@@ -7,7 +7,9 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
+	"sync/atomic"
 	"testing"
 )
 
@@ -193,7 +195,12 @@ func TestDownloadHuggingFaceFile_ErrorStatus(t *testing.T) {
 // TestDownloadHuggingFaceFile_DefaultOutputDir verifies fallback to ~/.cache/workflow/models/.
 func TestDownloadHuggingFaceFile_DefaultOutputDir(t *testing.T) {
 	content := []byte("small model")
+	var requests atomic.Int64
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests.Add(1)
+		if r.Method != http.MethodGet || r.URL.Path != "/org/model/resolve/main/tiny.bin" {
+			t.Errorf("download request = %s %s, want GET /org/model/resolve/main/tiny.bin", r.Method, r.URL.Path)
+		}
 		w.Header().Set("Content-Length", fmt.Sprintf("%d", len(content)))
 		_, _ = w.Write(content)
 	}))
@@ -203,21 +210,31 @@ func TestDownloadHuggingFaceFile_DefaultOutputDir(t *testing.T) {
 	SetHuggingFaceBaseURL(srv.URL)
 	defer SetHuggingFaceBaseURL(origURL)
 
-	// Override HOME so we don't pollute real user cache
+	// Isolate the native home directory so the real user cache is untouched.
 	tmpHome := t.TempDir()
-	t.Setenv("HOME", tmpHome)
+	homeEnv := "HOME"
+	if runtime.GOOS == "windows" {
+		homeEnv = "USERPROFILE"
+	}
+	t.Setenv(homeEnv, tmpHome)
 
 	path, err := DownloadHuggingFaceFile(context.Background(), "org/model", "tiny.bin", "", nil)
 	if err != nil {
 		t.Fatalf("DownloadHuggingFaceFile default dir: %v", err)
 	}
 
-	// Path must be under ~/.cache/workflow/models/
-	expectedPrefix := filepath.Join(tmpHome, ".cache", "workflow", "models")
-	if !strings.HasPrefix(path, expectedPrefix) {
-		t.Errorf("path %q should be under %q", path, expectedPrefix)
+	expected := filepath.Join(tmpHome, ".cache", "workflow", "models", "org--model", "tiny.bin")
+	if path != expected {
+		t.Errorf("path: want %q, got %q", expected, path)
 	}
-
-	// Cleanup
-	_ = os.RemoveAll(expectedPrefix)
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read downloaded file: %v", err)
+	}
+	if string(data) != string(content) {
+		t.Errorf("content: want %q, got %q", content, data)
+	}
+	if got := requests.Load(); got != 1 {
+		t.Errorf("download requests: want 1, got %d", got)
+	}
 }

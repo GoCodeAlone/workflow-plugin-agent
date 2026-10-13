@@ -369,6 +369,8 @@ func TestContainerManager_EnsureContainerPullDoesNotStarveStatus(t *testing.T) {
 }
 
 func TestContainerManagerDockerLifecycleOptions(t *testing.T) {
+	workspaceDir := t.TempDir()
+	cacheDir := t.TempDir()
 	client := &recordingDockerClient{
 		imageInspectErr:         errors.New("image not found"),
 		containerCreateResponse: client.ContainerCreateResult{ID: "container-1"},
@@ -387,13 +389,13 @@ func TestContainerManagerDockerLifecycleOptions(t *testing.T) {
 		available:  true,
 	}
 
-	id, err := cm.EnsureContainer(t.Context(), "project-1", "/tmp/workspace", executor.SandboxConfig{
+	id, err := cm.EnsureContainer(t.Context(), "project-1", workspaceDir, executor.SandboxConfig{
 		Image:   "alpine:3.22",
 		Memory:  "512m",
 		CPU:     1.5,
 		Network: "bridge",
 		Mounts: []executor.SandboxMount{
-			{Src: "/tmp/cache", Dst: "/cache", ReadOnly: true},
+			{Src: cacheDir, Dst: "/cache", ReadOnly: true},
 		},
 	})
 	if err != nil {
@@ -420,8 +422,8 @@ func TestContainerManagerDockerLifecycleOptions(t *testing.T) {
 		t.Errorf("host config resources = %#v", hostConfig.Resources)
 	}
 	if len(hostConfig.Mounts) != 2 ||
-		hostConfig.Mounts[0].Source != "/tmp/workspace" ||
-		hostConfig.Mounts[1].Source != "/tmp/cache" ||
+		hostConfig.Mounts[0].Source != workspaceDir ||
+		hostConfig.Mounts[1].Source != cacheDir ||
 		hostConfig.Mounts[1].Target != "/cache" ||
 		!hostConfig.Mounts[1].ReadOnly {
 		t.Errorf("host config mounts = %#v", hostConfig.Mounts)
@@ -471,6 +473,39 @@ func TestContainerManagerDockerLifecycleOptions(t *testing.T) {
 	}
 	if client.containerRemoveID != "container-1" || !client.containerRemoveOptions.Force {
 		t.Errorf("remove ID/options = %q/%#v", client.containerRemoveID, client.containerRemoveOptions)
+	}
+}
+
+func TestValidateMountPathsNativeHostAndLinuxTarget(t *testing.T) {
+	source := t.TempDir()
+	cases := []struct {
+		name, source, target, wantError string
+	}{
+		{"native host and Linux container", source, "/cache", ""},
+		{"normalized noncritical target", source, "/cache/./nested/..", ""},
+		{"relative source", "relative-cache", "/cache", "mount source must be an absolute path"},
+		{"relative target", source, "cache", "mount target must be an absolute path"},
+		{"empty target", source, "", "mount target must be an absolute path"},
+		{"Windows host path is not a Linux target", source, `C:\cache`, "mount target must be an absolute path"},
+		{"cleaned critical target", source, "/cache/../etc", "critical system path"},
+		{"repeated slash critical target", source, "//etc", "critical system path"},
+	}
+	for _, target := range []string{"/", "/etc", "/bin", "/usr", "/lib", "/lib64", "/sbin", "/sys", "/proc", "/dev"} {
+		cases = append(cases, struct{ name, source, target, wantError string }{
+			"critical " + target, source, target, "critical system path",
+		})
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			err := validateMountPaths(tc.source, tc.target)
+			if tc.wantError == "" {
+				if err != nil {
+					t.Fatalf("valid native source/Linux target rejected: %v", err)
+				}
+			} else if err == nil || !strings.Contains(err.Error(), tc.wantError) {
+				t.Errorf("validateMountPaths(%q, %q) = %v, want %q", tc.source, tc.target, err, tc.wantError)
+			}
+		})
 	}
 }
 

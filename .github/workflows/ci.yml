@@ -33,6 +33,28 @@ jobs:
       - name: go test
         run: go test -race ./...
 
+  windows-test:
+    name: Windows Owner Suite
+    runs-on: windows-2025
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Set up Go
+        uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+
+      - name: Configure git for private modules
+        run: git config --global url."https://${{ secrets.RELEASES_TOKEN }}@github.com/".insteadOf "https://github.com/"
+
+      - name: go vet
+        run: go vet ./...
+
+      - name: go test
+        run: go test -race -p=1 ./...
+
   validate-contracts:
     runs-on: ubuntu-latest
     permissions:

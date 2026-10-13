@@ -29,7 +29,8 @@ func LoadSession(path string) SessionState {
 }
 
 // SaveSession writes the session state to path, creating or overwriting the file.
-// The file is written with mode 0600 (owner read/write only).
+// New files are created with mode 0600 (owner read/write on Unix). On Windows,
+// this requests a writable file; access is governed by inherited directory ACLs.
 func SaveSession(path string, s SessionState) error {
 	data, err := json.Marshal(s)
 	if err != nil {

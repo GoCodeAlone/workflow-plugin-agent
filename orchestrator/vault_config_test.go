@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -116,8 +117,17 @@ func TestSaveVaultConfig_KeyFileCreated(t *testing.T) {
 	if err != nil {
 		t.Fatalf("key file not created: %v", err)
 	}
-	if info.Mode().Perm() != 0600 {
-		t.Errorf("key file permissions: got %o, want 0600", info.Mode().Perm())
+	if !info.Mode().IsRegular() {
+		t.Fatalf("key file must be regular, got %v", info.Mode())
+	}
+	wantMode := os.FileMode(0600)
+	if runtime.GOOS == "windows" {
+		// Go reports writable Windows files as 0666; ACLs are inherited
+		// from the directory and cannot be checked through POSIX mode bits.
+		wantMode = 0666
+	}
+	if info.Mode().Perm() != wantMode {
+		t.Errorf("key file reported permissions: got %o, want %o", info.Mode().Perm(), wantMode)
 	}
 }
 

@@ -3,6 +3,7 @@ package sdk_test
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 
 	"github.com/GoCodeAlone/workflow-plugin-agent/sdk"
@@ -45,13 +46,21 @@ func TestSessionRoundTrip(t *testing.T) {
 		t.Errorf("Custom[difficulty]: want %q, got %v", "hard", v)
 	}
 
-	// File must be owner-only.
+	// Unix creation permissions are owner-only. Windows stat synthesizes
+	// readable/writable mode bits; those bits do not describe the file's ACL.
 	info, err := os.Stat(path)
 	if err != nil {
 		t.Fatalf("stat: %v", err)
 	}
-	if perm := info.Mode().Perm(); perm != 0o600 {
-		t.Errorf("file permissions: want 0600, got %04o", perm)
+	if !info.Mode().IsRegular() {
+		t.Errorf("session file must be regular, got mode %v", info.Mode())
+	}
+	wantPerm := os.FileMode(0o600)
+	if runtime.GOOS == "windows" {
+		wantPerm = 0o666
+	}
+	if perm := info.Mode().Perm(); perm != wantPerm {
+		t.Errorf("file permissions: want %04o, got %04o", wantPerm, perm)
 	}
 }
 
