@@ -63,6 +63,8 @@ func expandPatterns(patterns []string) []string {
 
 // matchGlob matches a path against a pattern using doublestar for ** support.
 func matchGlob(pattern, path string) bool {
+	pattern = filepath.ToSlash(pattern)
+	path = filepath.ToSlash(path)
 	matched, err := doublestar.Match(pattern, path)
 	if err != nil {
 		// Malformed pattern — fall back to exact match.

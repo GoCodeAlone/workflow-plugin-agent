@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"path"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -483,16 +484,16 @@ func parseMemoryString(s string) (int64, error) {
 	return n, nil
 }
 
-// validateMountPaths checks that a bind mount source and target are safe.
-// Source must be an absolute path. Target must not be a critical system directory.
+// validateMountPaths requires a native absolute host source and an absolute Linux
+// container target. The cleaned target must not equal a listed critical directory.
 func validateMountPaths(source, target string) error {
 	if !filepath.IsAbs(source) {
 		return fmt.Errorf("mount source must be an absolute path: %q", source)
 	}
-	if !filepath.IsAbs(target) {
+	if !path.IsAbs(target) {
 		return fmt.Errorf("mount target must be an absolute path: %q", target)
 	}
-	cleanTarget := filepath.Clean(target)
+	cleanTarget := path.Clean(target)
 	for _, critical := range []string{"/", "/etc", "/bin", "/usr", "/lib", "/lib64", "/sbin", "/sys", "/proc", "/dev"} {
 		if cleanTarget == critical {
 			return fmt.Errorf("mount target %q is a critical system path", cleanTarget)

@@ -28,6 +28,8 @@ func TestGlobMatcherNativeSeparators(t *testing.T) {
 		{"cleaned path enters deny", []string{slashRoot + "/**"}, []string{slashRoot + "/.git/**"}, root + "/src/../.git/./config", Deny},
 		{"malformed native exact fallback", []string{filepath.Join(root, "[")}, nil, slashRoot + "/[", Allow},
 		{"malformed native deny fallback", []string{slashRoot + "/**"}, []string{filepath.Join(root, "[")}, slashRoot + "/[", Deny},
+		{"malformed fallback does not allow another path", []string{filepath.Join(root, "[")}, nil, slashRoot + "/other", Ask},
+		{"malformed fallback does not deny another path", []string{slashRoot + "/**"}, []string{filepath.Join(root, "[")}, slashRoot + "/other", Allow},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

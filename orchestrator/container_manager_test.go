@@ -476,6 +476,39 @@ func TestContainerManagerDockerLifecycleOptions(t *testing.T) {
 	}
 }
 
+func TestValidateMountPathsNativeHostAndLinuxTarget(t *testing.T) {
+	source := t.TempDir()
+	cases := []struct {
+		name, source, target, wantError string
+	}{
+		{"native host and Linux container", source, "/cache", ""},
+		{"normalized noncritical target", source, "/cache/./nested/..", ""},
+		{"relative source", "relative-cache", "/cache", "mount source must be an absolute path"},
+		{"relative target", source, "cache", "mount target must be an absolute path"},
+		{"empty target", source, "", "mount target must be an absolute path"},
+		{"Windows host path is not a Linux target", source, `C:\cache`, "mount target must be an absolute path"},
+		{"cleaned critical target", source, "/cache/../etc", "critical system path"},
+		{"repeated slash critical target", source, "//etc", "critical system path"},
+	}
+	for _, target := range []string{"/", "/etc", "/bin", "/usr", "/lib", "/lib64", "/sbin", "/sys", "/proc", "/dev"} {
+		cases = append(cases, struct{ name, source, target, wantError string }{
+			"critical " + target, source, target, "critical system path",
+		})
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			err := validateMountPaths(tc.source, tc.target)
+			if tc.wantError == "" {
+				if err != nil {
+					t.Fatalf("valid native source/Linux target rejected: %v", err)
+				}
+			} else if err == nil || !strings.Contains(err.Error(), tc.wantError) {
+				t.Errorf("validateMountPaths(%q, %q) = %v, want %q", tc.source, tc.target, err, tc.wantError)
+			}
+		})
+	}
+}
+
 func TestContainerManagerDockerErrors(t *testing.T) {
 	t.Run("image pull", func(t *testing.T) {
 		client := &recordingDockerClient{
