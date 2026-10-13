@@ -10,10 +10,21 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
+	"sync/atomic"
 	"testing"
 )
 
-// buildTestZip creates an in-memory zip containing a llama-server binary.
+const testLlamaServerPayload = "#!/bin/sh\necho llama-server"
+
+func testLlamaServerBinaryName() string {
+	if runtime.GOOS == "windows" {
+		return "llama-server.exe"
+	}
+	return "llama-server"
+}
+
+// buildTestZip creates an in-memory zip containing a named binary payload.
 func buildTestZip(t *testing.T, binName string) []byte {
 	t.Helper()
 	var buf bytes.Buffer
@@ -22,7 +33,7 @@ func buildTestZip(t *testing.T, binName string) []byte {
 	if err != nil {
 		t.Fatalf("zip.Create: %v", err)
 	}
-	if _, err := f.Write([]byte("#!/bin/sh\necho llama-server")); err != nil {
+	if _, err := f.Write([]byte(testLlamaServerPayload)); err != nil {
 		t.Fatalf("zip.Write: %v", err)
 	}
 	if err := w.Close(); err != nil {
@@ -110,9 +121,12 @@ func TestParseLlamaCppRelease_NoMatchingAsset(t *testing.T) {
 
 // TestEnsureLlamaServer_DownloadsAndCaches verifies the full download + cache flow.
 func TestEnsureLlamaServer_DownloadsAndCaches(t *testing.T) {
-	zipData := buildTestZip(t, "llama-server")
+	binName := testLlamaServerBinaryName()
+	zipData := buildTestZip(t, binName)
 
+	var requests atomic.Int64
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests.Add(1)
 		w.Header().Set("Content-Type", "application/zip")
 		_, _ = w.Write(zipData)
 	}))
@@ -131,8 +145,19 @@ func TestEnsureLlamaServer_DownloadsAndCaches(t *testing.T) {
 	if err != nil {
 		t.Fatalf("EnsureLlamaServer: %v", err)
 	}
-	if _, err := os.Stat(path); err != nil {
-		t.Errorf("binary not found at %s: %v", path, err)
+	wantPath := filepath.Join(llamaCppCacheDir, llamaCppPinnedVersion, binName)
+	if path != wantPath {
+		t.Errorf("binary path: want %q, got %q", wantPath, path)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read downloaded binary: %v", err)
+	}
+	if string(data) != testLlamaServerPayload {
+		t.Errorf("binary content: want %q, got %q", testLlamaServerPayload, data)
+	}
+	if got := requests.Load(); got != 1 {
+		t.Errorf("download requests: want 1, got %d", got)
 	}
 
 	// Second call should use cache (no new HTTP request).
@@ -143,25 +168,33 @@ func TestEnsureLlamaServer_DownloadsAndCaches(t *testing.T) {
 	if path != path2 {
 		t.Errorf("cached path mismatch: %q vs %q", path, path2)
 	}
+	if got := requests.Load(); got != 1 {
+		t.Errorf("download requests after cached call: want 1, got %d", got)
+	}
 }
 
 // TestEnsureLlamaServer_GitHubAPIFlow verifies that the GitHub API is called and parsed correctly.
 func TestEnsureLlamaServer_GitHubAPIFlow(t *testing.T) {
-	zipData := buildTestZip(t, "llama-server")
+	binName := testLlamaServerBinaryName()
+	zipData := buildTestZip(t, binName)
 
-	// Determine the asset suffix for the current platform so we can craft a matching release.
+	// Advertise the ZIP format served by the fixture for the current platform.
 	suffix := assetNameForPlatform("b9999", runtime.GOOS, runtime.GOARCH)
+	suffix = strings.Replace(suffix, ".tar.gz", ".zip", 1)
 	assetName := "llama-b9999" + suffix
 
-	var zipSrvURL string
+	var downloadRequests atomic.Int64
 	zipSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		downloadRequests.Add(1)
 		w.Header().Set("Content-Type", "application/zip")
 		_, _ = w.Write(zipData)
 	}))
 	defer zipSrv.Close()
-	zipSrvURL = zipSrv.URL + "/download.zip"
+	zipSrvURL := zipSrv.URL + "/download.zip"
 
+	var apiRequests atomic.Int64
 	apiSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		apiRequests.Add(1)
 		w.Header().Set("Content-Type", "application/json")
 		release := ghRelease{
 			TagName: "b9999",
@@ -189,20 +222,43 @@ func TestEnsureLlamaServer_GitHubAPIFlow(t *testing.T) {
 	if err != nil {
 		t.Fatalf("EnsureLlamaServer via API: %v", err)
 	}
-	if _, err := os.Stat(path); err != nil {
-		t.Errorf("binary not at %s: %v", path, err)
+	wantPath := filepath.Join(llamaCppCacheDir, llamaCppPinnedVersion, binName)
+	if path != wantPath {
+		t.Errorf("binary path: want %q, got %q", wantPath, path)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read downloaded binary: %v", err)
+	}
+	if string(data) != testLlamaServerPayload {
+		t.Errorf("binary content: want %q, got %q", testLlamaServerPayload, data)
+	}
+	if got := apiRequests.Load(); got != 1 {
+		t.Errorf("GitHub API requests: want 1, got %d", got)
+	}
+	if got := downloadRequests.Load(); got != 1 {
+		t.Errorf("download requests: want 1, got %d", got)
 	}
 }
 
 func TestExtractLlamaServerFromZip_Found(t *testing.T) {
-	zipData := buildTestZip(t, "llama-server")
-	dest := filepath.Join(t.TempDir(), "llama-server")
+	binName := testLlamaServerBinaryName()
+	for _, entry := range []string{binName, "bin/" + binName} {
+		t.Run(entry, func(t *testing.T) {
+			zipData := buildTestZip(t, entry)
+			dest := filepath.Join(t.TempDir(), binName)
 
-	if err := extractLlamaServerFromZip(zipData, dest, "b1234"); err != nil {
-		t.Fatalf("extractLlamaServerFromZip: %v", err)
-	}
-	if _, err := os.Stat(dest); err != nil {
-		t.Errorf("dest not created: %v", err)
+			if err := extractLlamaServerFromZip(zipData, dest, "b1234"); err != nil {
+				t.Fatalf("extractLlamaServerFromZip: %v", err)
+			}
+			data, err := os.ReadFile(dest)
+			if err != nil {
+				t.Fatalf("read extracted binary: %v", err)
+			}
+			if string(data) != testLlamaServerPayload {
+				t.Errorf("binary content: want %q, got %q", testLlamaServerPayload, data)
+			}
+		})
 	}
 }
 
@@ -213,7 +269,7 @@ func TestExtractLlamaServerFromZip_NotFound(t *testing.T) {
 	_, _ = f.Write([]byte("data"))
 	_ = w.Close()
 
-	dest := filepath.Join(t.TempDir(), "llama-server")
+	dest := filepath.Join(t.TempDir(), testLlamaServerBinaryName())
 	err := extractLlamaServerFromZip(buf.Bytes(), dest, "b1234")
 	if err == nil {
 		t.Error("expected error when binary not in zip")

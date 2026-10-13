@@ -6,20 +6,21 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"testing"
 	"time"
 
 	"github.com/GoCodeAlone/workflow-plugin-agent/provider"
 )
 
-// mockCLIAdapter is a test adapter that drives a shell script mock CLI.
+// mockCLIAdapter is a test adapter that drives a compiled mock CLI.
 type mockCLIAdapter struct {
 	name    string
 	binary  string
 	workDir string
 }
 
-func (m *mockCLIAdapter) Name() string  { return m.name }
+func (m *mockCLIAdapter) Name() string   { return m.name }
 func (m *mockCLIAdapter) Binary() string { return m.binary }
 
 func (m *mockCLIAdapter) NonInteractiveArgs(msg string) []string {
@@ -82,6 +83,9 @@ func main() {
 	dir := t.TempDir()
 	srcFile := filepath.Join(dir, "mock_cli.go")
 	binFile := filepath.Join(dir, "mock_cli")
+	if runtime.GOOS == "windows" {
+		binFile += ".exe"
+	}
 
 	if err := os.WriteFile(srcFile, []byte(src), 0644); err != nil {
 		t.Fatalf("write mock CLI src: %v", err)
@@ -122,8 +126,8 @@ func TestPTYProviderChat(t *testing.T) {
 	if resp == nil {
 		t.Fatal("Chat() returned nil response")
 	}
-	if resp.Content == "" {
-		t.Error("Chat() returned empty content")
+	if want := "RESPONSE: hello\n"; resp.Content != want {
+		t.Errorf("Chat() content = %q, want %q", resp.Content, want)
 	}
 }
 

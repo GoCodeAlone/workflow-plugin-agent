@@ -277,8 +277,9 @@ func TestProviderRegistryTestConnection(t *testing.T) {
 	if msg != "connection successful" {
 		t.Errorf("expected 'connection successful', got %q", msg)
 	}
-	if latency <= 0 {
-		t.Error("expected positive latency")
+	// An immediate mock call can complete within one Windows clock tick.
+	if latency < 0 {
+		t.Errorf("expected nonnegative latency, got %v", latency)
 	}
 }
 

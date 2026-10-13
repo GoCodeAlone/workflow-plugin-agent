@@ -369,6 +369,8 @@ func TestContainerManager_EnsureContainerPullDoesNotStarveStatus(t *testing.T) {
 }
 
 func TestContainerManagerDockerLifecycleOptions(t *testing.T) {
+	workspaceDir := t.TempDir()
+	cacheDir := t.TempDir()
 	client := &recordingDockerClient{
 		imageInspectErr:         errors.New("image not found"),
 		containerCreateResponse: client.ContainerCreateResult{ID: "container-1"},
@@ -387,13 +389,13 @@ func TestContainerManagerDockerLifecycleOptions(t *testing.T) {
 		available:  true,
 	}
 
-	id, err := cm.EnsureContainer(t.Context(), "project-1", "/tmp/workspace", executor.SandboxConfig{
+	id, err := cm.EnsureContainer(t.Context(), "project-1", workspaceDir, executor.SandboxConfig{
 		Image:   "alpine:3.22",
 		Memory:  "512m",
 		CPU:     1.5,
 		Network: "bridge",
 		Mounts: []executor.SandboxMount{
-			{Src: "/tmp/cache", Dst: "/cache", ReadOnly: true},
+			{Src: cacheDir, Dst: "/cache", ReadOnly: true},
 		},
 	})
 	if err != nil {
@@ -420,8 +422,8 @@ func TestContainerManagerDockerLifecycleOptions(t *testing.T) {
 		t.Errorf("host config resources = %#v", hostConfig.Resources)
 	}
 	if len(hostConfig.Mounts) != 2 ||
-		hostConfig.Mounts[0].Source != "/tmp/workspace" ||
-		hostConfig.Mounts[1].Source != "/tmp/cache" ||
+		hostConfig.Mounts[0].Source != workspaceDir ||
+		hostConfig.Mounts[1].Source != cacheDir ||
 		hostConfig.Mounts[1].Target != "/cache" ||
 		!hostConfig.Mounts[1].ReadOnly {
 		t.Errorf("host config mounts = %#v", hostConfig.Mounts)

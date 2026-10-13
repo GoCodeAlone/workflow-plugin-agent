@@ -377,17 +377,35 @@ func TestShellExecTool_Execute(t *testing.T) {
 	})
 
 	t.Run("command runs in workspace dir", func(t *testing.T) {
-		result, err := tool.Execute(ctx, map[string]any{"command": "pwd"})
+		const marker = "workspace-marker\n"
+		if err := os.WriteFile(filepath.Join(ws, "cwd-marker.txt"), []byte(marker), 0600); err != nil {
+			t.Fatal(err)
+		}
+		// A relative read proves the real shell's working directory without
+		// interpreting Git Bash's /c/... output as a native Windows path.
+		result, err := tool.Execute(ctx, map[string]any{"command": "cat cwd-marker.txt"})
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
 		m := result.(map[string]any)
-		stdout := m["stdout"].(string)
-		// resolve symlinks for comparison (temp dirs may be symlinked)
-		resolvedWs, _ := filepath.EvalSymlinks(ws)
-		resolvedStdout, _ := filepath.EvalSymlinks(stdout[:len(stdout)-1]) // strip trailing newline
-		if resolvedStdout != resolvedWs {
-			t.Errorf("expected working dir %q, got %q", resolvedWs, resolvedStdout)
+		if m["stdout"] != marker || m["exit_code"] != 0 || m["stderr"] != "" {
+			t.Errorf("workspace relative read = %#v, want marker and successful exit", m)
+		}
+	})
+
+	t.Run("context overrides workspace dir", func(t *testing.T) {
+		overrideDir := t.TempDir()
+		const marker = "context-workspace-marker\n"
+		if err := os.WriteFile(filepath.Join(overrideDir, "cwd-marker.txt"), []byte(marker), 0600); err != nil {
+			t.Fatal(err)
+		}
+		result, err := tool.Execute(WithWorkspacePath(ctx, overrideDir), map[string]any{"command": "cat cwd-marker.txt"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		m := result.(map[string]any)
+		if m["stdout"] != marker || m["exit_code"] != 0 || m["stderr"] != "" {
+			t.Errorf("context workspace relative read = %#v, want override marker and successful exit", m)
 		}
 	})
 }
